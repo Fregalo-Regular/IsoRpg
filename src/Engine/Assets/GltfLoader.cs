@@ -6,11 +6,14 @@ using Engine.Graphics;
 using EngineMesh = Engine.Graphics.Mesh;
 using GltfPrimitiveType = SharpGLTF.Schema2.PrimitiveType;
 using SharpGLTF.Memory;
+using StbImageSharp;
+using System;
 
 namespace Engine.Assets;
 
 public sealed record GltfPrimitive(
-    EngineMesh Mesh, Matrix4x4 Transform, Vector3 BoundsMin, Vector3 BoundsMax);
+    EngineMesh Mesh, Matrix4x4 Transform, Vector3 BoundsMin, Vector3 BoundsMax,
+    Texture2D? Texture = null);
 
 
 public static class GltfLoader
@@ -22,6 +25,7 @@ public static class GltfLoader
         var model = ModelRoot.Load(AssetPath.Resolve(relativePath));
         
         //ProbeChannelMethods(model);
+        ProbeMaterial(model);
 
         var result = new List<GltfPrimitive>();
 
@@ -90,17 +94,27 @@ public static class GltfLoader
                 }
                 var transform = node.Skin is null ? node.WorldMatrix : Matrix4x4.Identity;
 
-                result.Add(new GltfPrimitive(
-                    new EngineMesh(gl, vertices, idx), transform, min, max));
+                Texture2D? tex = null;
+                var mat = prim.Material;
+                if (mat != null)
+                {
+                    var bc = mat.Channels.FirstOrDefault(c => c.Key == "BaseColor");
+                    if (bc.Texture?.PrimaryImage is { } img)
+                    {
+                        var decoded = ImageResult.FromMemory(img.Content.Content.ToArray(),
+                                                             ColorComponents.RedGreenBlueAlpha);
+                        tex = Texture2D.FromRgba(gl, decoded.Width, decoded.Height, decoded.Data);
+                    }
+                }
+                result.Add(new GltfPrimitive(new EngineMesh(gl, vertices, idx), transform, min, max, tex));
             }
         }
         Skeleton? skeleton = null;
         if (model.LogicalSkins.Count > 0)
         {
-            skeleton = new Skeleton(model.LogicalSkins[0]);
+            skeleton = new Skeleton(model, model.LogicalSkins[0]);
             skeleton.UpdateBindPose();
-            Console.WriteLine($"[skin] {relativePath}: костей {skeleton.Palette.Length}, " +
-                              $"отклонение от Identity = {skeleton.MaxDeviationFromIdentity():E3} м");
+            skeleton.BindVsLibrary();
         }
 
         Console.WriteLine($"[glTF] {relativePath}: {result.Count} примитивов");
@@ -195,5 +209,14 @@ public static class GltfLoader
         var ja = model.LogicalMeshes[0].Primitives[0].GetVertexAccessor("JOINTS_0");
         foreach (var m in ja!.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
             if (m.Name.StartsWith("As")) Console.WriteLine($"  ACC {m.ReturnType.Name} {m.Name}()");
+    }
+
+    public static void ProbeMaterial(ModelRoot model)
+    {
+        var prim = model.LogicalMeshes[0].Primitives[0];
+        Dump("Primitive", prim);
+        var mat = prim.Material;
+        Dump("Material", mat);
+        if (mat != null) foreach (var ch in mat.Channels) Dump("Channel:" + ch.Key, ch);
     }
 }

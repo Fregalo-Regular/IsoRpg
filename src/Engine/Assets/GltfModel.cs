@@ -15,6 +15,6 @@ public sealed class GltfModel : IDisposable
 
     public void Dispose()
     {
-        foreach (var p in Primitives) p.Mesh.Dispose();
+        foreach (var p in Primitives) { p.Mesh.Dispose(); p.Texture?.Dispose();}
     }
 }

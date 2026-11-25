@@ -33,6 +33,9 @@ internal sealed class MyGame : EngineHost
     private Vector3 _lightDir = Vector3.Normalize(new Vector3(-0.4f, 1.2f, 0.3f));
     private bool _debugNormals;
     private GltfModel _man = null!, _fox = null!;
+    private float _animTime;
+    private bool _play = true;
+    private int _animIndex;
 
     protected override void OnLoad()
     {
@@ -85,6 +88,7 @@ internal sealed class MyGame : EngineHost
 
         if (_kb.IsKeyPressed(Key.Q)) _camera.Yaw -= 1.2f * f;
         if (_kb.IsKeyPressed(Key.E)) _camera.Yaw += 1.2f * f;
+        if (_play) _animTime += (float)dt;
     }
 
     protected override void OnResize(Vector2D<int> size) => _camera?.SetViewport(size);
@@ -140,6 +144,11 @@ internal sealed class MyGame : EngineHost
                      new Vector3(1.6f, 1.3f, 0.6f));
 
         _shader.SetUniform("uUseTexture", 0);
+        if (_man.Skeleton is { } sk && sk.AnimationCount > 0)
+        {
+            if (_play) sk.Play(_animIndex, _animTime);
+            // если на паузе — поза уже установлена скрабом ниже
+        }
         DrawModel(_man, new Vector3(-6f, 0f, 0f), _manScale);
         DrawModel(_fox, new Vector3( 6f, 0f, 0f), _foxScale);
         _shader.SetUniform("uSkinned", 0);
@@ -221,6 +230,17 @@ internal sealed class MyGame : EngineHost
         if (ImGui.RadioButton("Linear", _filter == TexFilter.Linear)) _filter = TexFilter.Linear;
         ImGui.SameLine();
         if (ImGui.RadioButton("Trilinear", _filter == TexFilter.Trilinear)) _filter = TexFilter.Trilinear;
+
+        
+        if (_man.Skeleton is { } s && s.AnimationCount > 0)
+        {
+            ImGui.Checkbox("Play", ref _play);
+            float dur = s.Duration(_animIndex);
+            float t = _animTime % dur;
+            if (ImGui.SliderFloat("Anim time", ref t, 0f, dur))
+            { _play = false; _animTime = t; s.Play(_animIndex, t); }
+            ImGui.Text($"duration {dur:F2}s");
+        }
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -278,10 +298,13 @@ internal sealed class MyGame : EngineHost
 
         foreach (var p in model.Primitives)
         {
+            if (p.Texture != null) { p.Texture.Bind(TextureUnit.Texture0); _shader.SetUniform("uUseTexture", 1); }
+            else _shader.SetUniform("uUseTexture", 0);
+
             var m = p.Transform * scaleM
                   * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
             _shader.SetUniform("uModel", m);
-            _shader.SetUniform("uTint", new Vector3(0.78f, 0.75f, 0.70f));
+            _shader.SetUniform("uTint", Vector3.One);
             p.Mesh.Draw();
             _drawCalls++;
         }
