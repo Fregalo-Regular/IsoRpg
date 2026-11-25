@@ -25,7 +25,7 @@ public static class GltfLoader
         var model = ModelRoot.Load(AssetPath.Resolve(relativePath));
         
         //ProbeChannelMethods(model);
-        ProbeMaterial(model);
+        //ProbeMaterial(model);
 
         var result = new List<GltfPrimitive>();
 

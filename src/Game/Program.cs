@@ -36,6 +36,10 @@ internal sealed class MyGame : EngineHost
     private float _animTime;
     private bool _play = true;
     private int _animIndex;
+    private Vector3 _playerPos = new(-6f, 0f, 0f);
+    private Vector3 _playerTarget = new(-6f, 0f, 0f);
+    private bool _moving, _follow = true;
+    private float _playerYaw, _yawOffset, _walkTime;
 
     protected override void OnLoad()
     {
@@ -46,6 +50,14 @@ internal sealed class MyGame : EngineHost
         {
             if (_imgui.WantMouse) return;
             _camera.ZoomAt(MouseScreen, MathF.Pow(1.15f, -wheel.Y));
+        };
+
+        _mouse.MouseDown += (_, b) =>
+        {
+            if (b != MouseButton.Left || _imgui.WantMouse) return;
+            var hit = _camera.ScreenToGround(MouseScreen);
+            _playerTarget = new Vector3(hit.X, 0f, hit.Z);
+            _moving = true;
         };
 
         _gpuWorld = new GpuProfiler(Gl);
@@ -79,16 +91,37 @@ internal sealed class MyGame : EngineHost
         float f = (float)dt;
 
         var move = Vector3.Zero;
-        if (_kb.IsKeyPressed(Key.W)) move += _camera.Forward;
-        if (_kb.IsKeyPressed(Key.S)) move -= _camera.Forward;
-        if (_kb.IsKeyPressed(Key.D)) move += _camera.Right;
-        if (_kb.IsKeyPressed(Key.A)) move -= _camera.Right;
+        if (_kb.IsKeyPressed(Key.W)) { move += _camera.Forward; _follow = false; }
+        if (_kb.IsKeyPressed(Key.S)) { move -= _camera.Forward; _follow = false; }
+        if (_kb.IsKeyPressed(Key.D)) { move += _camera.Right; _follow = false; }
+        if (_kb.IsKeyPressed(Key.A)) { move -= _camera.Right; _follow = false; }
         if (move != Vector3.Zero)
             _camera.Target += Vector3.Normalize(move) * (_camera.ViewHeight * 0.8f) * f;
 
         if (_kb.IsKeyPressed(Key.Q)) _camera.Yaw -= 1.2f * f;
         if (_kb.IsKeyPressed(Key.E)) _camera.Yaw += 1.2f * f;
         if (_play) _animTime += (float)dt;
+
+        if (_moving)
+        {
+            var d = _playerTarget - _playerPos; d.Y = 0;
+            float dist = d.Length();
+            if (dist < 0.05f) _moving = false;
+            else
+            {
+                var dir = d / dist;
+                _playerPos += dir * MathF.Min(3f * (float)dt, dist);
+                _playerYaw = MathF.Atan2(dir.X, dir.Z);
+                _walkTime += (float)dt;
+            }
+        }
+        if (_follow)
+        {
+            var want = new Vector3(_playerPos.X, 0f, _playerPos.Z);
+            _camera.Target = Vector3.Lerp(_camera.Target, want, 1f - MathF.Exp(-5f * (float)dt));
+        }
+        float g = GroundHeight(_playerPos.X, _playerPos.Z);
+        _playerPos.Y += (g - _playerPos.Y) * (1f - MathF.Exp(-12f * (float)dt));
     }
 
     protected override void OnResize(Vector2D<int> size) => _camera?.SetViewport(size);
@@ -135,7 +168,6 @@ internal sealed class MyGame : EngineHost
                      (x + z) % 2 == 0 ? Vector3.One : new Vector3(0.72f, 0.76f, 0.85f));
         }
 
-        // Курсор: тайл под мышью. Это уже почти click-to-move.
         var hit = _camera.ScreenToGround(MouseScreen);
         int hx = (int)MathF.Round(hit.X / Tile + half);
         int hz = (int)MathF.Round(hit.Z / Tile + half);
@@ -144,13 +176,13 @@ internal sealed class MyGame : EngineHost
                      new Vector3(1.6f, 1.3f, 0.6f));
 
         _shader.SetUniform("uUseTexture", 0);
-        if (_man.Skeleton is { } sk && sk.AnimationCount > 0)
+        if (_man.Skeleton is { } sk)
         {
-            if (_play) sk.Play(_animIndex, _animTime);
-            // если на паузе — поза уже установлена скрабом ниже
+            if (_moving) sk.Play(0, _walkTime);
+            else sk.UpdateBindPose();
         }
-        DrawModel(_man, new Vector3(-6f, 0f, 0f), _manScale);
-        DrawModel(_fox, new Vector3( 6f, 0f, 0f), _foxScale);
+        DrawModel(_man, _playerPos, _manScale, _playerYaw + _yawOffset);
+        DrawModel(_fox, new Vector3(6f, 0f, 0f), _foxScale);
         _shader.SetUniform("uSkinned", 0);
 
         _gpuWorld.End();
@@ -241,6 +273,10 @@ internal sealed class MyGame : EngineHost
             { _play = false; _animTime = t; s.Play(_animIndex, t); }
             ImGui.Text($"duration {dur:F2}s");
         }
+
+        ImGui.Checkbox("Follow", ref _follow);
+        ImGui.SliderFloat("Yaw offset", ref _yawOffset, -3.14f, 3.14f);
+        ImGui.Text($"Moving: {_moving}");
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -270,7 +306,7 @@ internal sealed class MyGame : EngineHost
         _imgui.Dispose(); _tile.Dispose(); _quad.Dispose(); _shader.Dispose(); _gpuWorld.Dispose(); _gpuUi.Dispose();
     }
 
-    private void DrawModel(GltfModel model, Vector3 position, float scale)
+    private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw = 0f)
     {
         if (model.Primitives.Count == 0) return;
 
@@ -302,7 +338,8 @@ internal sealed class MyGame : EngineHost
             else _shader.SetUniform("uUseTexture", 0);
 
             var m = p.Transform * scaleM
-                  * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
+                    * Matrix4x4.CreateRotationY(yaw)
+                    * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
             _shader.SetUniform("uModel", m);
             _shader.SetUniform("uTint", Vector3.One);
             p.Mesh.Draw();
@@ -325,6 +362,14 @@ internal sealed class MyGame : EngineHost
             lowest = MathF.Min(lowest, Vector3.Transform(corner, m).Y);
         }
         return lowest;
+    }
+
+    private float GroundHeight(float x, float z)
+    {
+        float half = (_grid - 1) / 2f;
+        int ix = Math.Clamp((int)MathF.Floor(x / Tile + half + 0.5f), 0, _grid - 1);
+        int iz = Math.Clamp((int)MathF.Floor(z / Tile + half + 0.5f), 0, _grid - 1);
+        return Terrace(ix, iz);
     }
 }
 
