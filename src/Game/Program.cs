@@ -7,9 +7,8 @@ using ImGuiNET;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
-using Silk.NET.Windowing;
 using Engine.Assets;
-//using Mesh = Engine.Graphics.Mesh;
+using Engine.ECS;
 
 namespace Game;
 
@@ -33,20 +32,20 @@ internal sealed class MyGame : EngineHost
     private float _manScale = 1f, _foxScale = 0.01f, _lightAzimuth = 140f;
     private Vector3 _lightDir = Vector3.Normalize(new Vector3(-0.4f, 1.2f, 0.3f));
     private bool _debugNormals;
-    private GltfModel _man = null!, _fox = null!;
+    private GltfModel man = null!, fox = null!;
     private float _animTime;
     private bool _play = true;
     private int _animIndex;
-    private Vector3 _playerPos = new(-6f, 0f, 0f);
-    private Vector3 _playerTarget = new(-6f, 0f, 0f);
-    private bool _moving, _follow = true;
-    private float _playerYaw, _yawOffset, _walkTime;
+    private bool _follow = true;
+    private float _yawOffset;
     private Heightfield _height = null!;
     private readonly List<Obstacle> _obstacles = new();
     private Mesh _crate = null!;
     private float _maxStep = 0.45f, _playerRadius = 0.35f;
     private bool _showColliders = true;
     private bool _lmbHeld;
+    private World _world = new();
+    private int _player, _fox;
 
     protected override void OnLoad()
     {
@@ -59,23 +58,11 @@ internal sealed class MyGame : EngineHost
             _camera.ZoomAt(MouseScreen, MathF.Pow(1.15f, -wheel.Y));
         };
 
-        // _mouse.MouseDown += (_, b) =>
-        // {
-        //     if (_mouse.IsButtonPressed(MouseButton.Left) && !_imgui.WantMouse)
-        //     {
-        //         _camera.ScreenRay(MouseScreen, out var o, out var d);
-        //         if (_height.Raycast(o, d, 400f, out var h))
-        //         {
-        //             _playerTarget = new Vector3(h.X, 0f, h.Z);
-        //             _moving = true;
-        //         }
-        //     }
-        // };
         _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) _lmbHeld = true; };
-        _mouse.MouseUp   += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
+        _mouse.MouseUp += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
 
         _gpuWorld = new GpuProfiler(Gl);
-        _gpuUi   = new GpuProfiler(Gl);
+        _gpuUi = new GpuProfiler(Gl);
 
         _camera = new IsoCamera(FramebufferSize);
         _imgui = new ImGuiLayer(Gl, Input);
@@ -84,10 +71,6 @@ internal sealed class MyGame : EngineHost
 
         _height = new Heightfield(_grid, Tile, Terrace);
         _crate = MakeCube(Gl);
-        _obstacles.Add(new Obstacle { Pos = new Vector3(-10f, 0f, 4f), R = 0.7f, H = 1.0f });
-        _obstacles.Add(new Obstacle { Pos = new Vector3(-2f, 0f, -10f), R = 0.7f, H = 1.2f });
-        _obstacles.Add(new Obstacle { Pos = new Vector3(8f, 0f, -6f), R = 0.7f, H = 0.8f });
-        _obstacles.Add(new Obstacle { Pos = new Vector3(6f, 0f, 0f), R = 0.6f, H = 0.7f }); // лиса
 
         // Квад лежит в XZ, нормаль +Y (см. вычисление winding выше)
         Vertex[] vertices =
@@ -100,8 +83,39 @@ internal sealed class MyGame : EngineHost
         ushort[] indices = [0, 1, 2, 2, 3, 0];
         _quad = new Mesh(Gl, vertices, indices);
 
-        _man = GltfLoader.Load(Gl, "assets/models/CesiumMan.glb");
-        _fox = GltfLoader.Load(Gl, "assets/models/Fox.glb");
+        man = GltfLoader.Load(Gl, "assets/models/CesiumMan.glb");
+        fox = GltfLoader.Load(Gl, "assets/models/Fox.glb");
+
+        _player = _world.Create();
+        _world.Add<Transform>(_player) = new Transform { Pos = new Vector3(-6, 0, 0) };
+        _world.Add<Movement>(_player) = new Movement { Speed = 3f };
+        _world.Add<Collider>(_player) = new Collider { Radius = _playerRadius };
+        _world.Add<Renderable>(_player) = new Renderable { Model = man, Scale = _manScale, Tint = Vector3.One };
+        _world.Add<PlayerTag>(_player);
+
+        _fox = _world.Create();
+        _world.Add<Transform>(_fox) = new Transform { Pos = new Vector3(6, 0, 0) };
+        _world.Add<Renderable>(_fox) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+
+        int m = _world.Create();
+        _world.Add<Transform>(m) = new Transform { Pos = new Vector3(0,0,10) };
+        _world.Add<Renderable>(m) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+
+        foreach (var (p, r, h) in new[] {
+            (new Vector3(-10,0,4), 0.7f, 1.0f),
+            (new Vector3(-2,0,-10), 0.7f, 1.2f),
+            (new Vector3(8,0,-6), 0.7f, 0.8f) })
+        {
+            int e = _world.Create();
+            _world.Add<Transform>(e) = new Transform { Pos = p };
+            _world.Add<Collider>(e) = new Collider { Radius = r };
+            _world.Add<Renderable>(e) = new Renderable { Mesh = _crate, Size = new Vector3(r * 2, h, r * 2), Tint = new Vector3(0.8f, 0.6f, 0.35f) };
+            _world.Add<ObstacleTag>(e);
+        }
+        // лиса тоже препятствие:
+        _world.Add<Collider>(_fox) = new Collider { Radius = 0.3f };
+        _world.Add<Collider>(m) = new Collider {Radius = 0.3f};
+        _world.Add<ObstacleTag>(_fox); _world.Add<ObstacleTag>(m);
     }
 
     private Vector2 MouseScreen => new(_mouse.Position.X, _mouse.Position.Y);
@@ -123,58 +137,9 @@ internal sealed class MyGame : EngineHost
         if (_kb.IsKeyPressed(Key.E)) _camera.Yaw += 1.2f * f;
         if (_play) _animTime += (float)dt;
 
-        if (_lmbHeld && !_imgui.WantMouse)
-        {
-            _camera.ScreenRay(MouseScreen, out var o, out var d);
-            if (_height.Raycast(o, d, 400f, out var h))
-            { _playerTarget = new Vector3(h.X, 0f, h.Z); _moving = true; }
-        }
-
-        if (_moving)
-        {
-            var d3 = _playerTarget - _playerPos; d3.Y = 0;
-            float dist = d3.Length();
-            if (dist < 0.05f) _moving = false;
-            else
-            {
-                var dir = d3 / dist;
-                var desired = _playerPos + dir * MathF.Min(3f * (float)dt, dist);
-
-                // предел шага: не лезем на стену выше maxStep
-                if (_height.Sample(desired.X, desired.Z) - _playerPos.Y <= _maxStep)
-                {
-                    // границы поля
-                    float lim = (_grid - 1) / 2f * Tile;
-                    desired.X = Math.Clamp(desired.X, -lim, lim);
-                    desired.Z = Math.Clamp(desired.Z, -lim, lim);
-
-                    // круг-круг: выталкиваем из препятствий
-                    foreach (var ob in _obstacles)
-                    {
-                        var d2 = new Vector2(desired.X - ob.Pos.X, desired.Z - ob.Pos.Z);
-                        float r = ob.R + _playerRadius;
-                        float len = d2.Length();
-                        if (len < r)
-                        {
-                            var n = len > 1e-4f ? d2 / len : new Vector2(1, 0);
-                            desired.X = ob.Pos.X + n.X * r;
-                            desired.Z = ob.Pos.Z + n.Y * r;
-                        }
-                    }
-                    _playerPos = desired;
-                    _playerYaw = MathF.Atan2(dir.X, dir.Z);
-                    _walkTime += (float)dt;
-                }
-                else _moving = false; // упёрлись в стену
-            }
-        }
-        float g = _height.Sample(_playerPos.X, _playerPos.Z);
-        _playerPos.Y += (g - _playerPos.Y) * (1f - MathF.Exp(-12f * (float)dt));
-        if (_follow)
-        {
-            var want = new Vector3(_playerPos.X, 0f, _playerPos.Z);
-            _camera.Target = Vector3.Lerp(_camera.Target, want, 1f - MathF.Exp(-5f * (float)dt));
-        }
+        InputSystem();
+        MovementSystem((float)dt);
+        CameraSystem((float)dt);
 
     }
 
@@ -216,15 +181,15 @@ internal sealed class MyGame : EngineHost
         _drawCalls = 0;
         float half = (_grid - 1) / 2f;
         for (int z = 0; z < _grid; z++)
-        for (int x = 0; x < _grid; x++)
-        {
-            DrawTile((x - half) * Tile, Terrace(x, z), (z - half) * Tile,
-                     (x + z) % 2 == 0 ? Vector3.One : new Vector3(0.72f, 0.76f, 0.85f));
-        }
+            for (int x = 0; x < _grid; x++)
+            {
+                DrawTile((x - half) * Tile, Terrace(x, z), (z - half) * Tile,
+                         (x + z) % 2 == 0 ? Vector3.One : new Vector3(0.72f, 0.76f, 0.85f));
+            }
 
         _camera.ScreenRay(MouseScreen, out var ro, out var rd);
         Vector3 hit = _height.Raycast(ro, rd, 400f, out var hh) ? hh : _camera.ScreenToGround(MouseScreen);
-        
+
         int hx = (int)MathF.Round(hit.X / Tile + half);
         int hz = (int)MathF.Round(hit.Z / Tile + half);
         if (hx >= 0 && hx < _grid && hz >= 0 && hz < _grid)
@@ -248,19 +213,13 @@ internal sealed class MyGame : EngineHost
         if (_cull) Gl.Enable(EnableCap.CullFace);
 
         _shader.SetUniform("uUseTexture", 0);
-        if (_man.Skeleton is { } sk)
-        {
-            if (_moving) sk.Play(0, _walkTime);
-            else sk.UpdateBindPose();
-        }
-        DrawModel(_man, _playerPos, _manScale, _playerYaw + _yawOffset);
-        DrawModel(_fox, new Vector3(6f, 0f, 0f), _foxScale);
+
+        RenderSystem();
         _shader.SetUniform("uSkinned", 0);
 
         _gpuWorld.End();
 
         _gpuUi.Begin();
-        //DrawDebugUi(dt, hit);
         _gpuUi.End();
 
         _cpuMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
@@ -335,8 +294,7 @@ internal sealed class MyGame : EngineHost
         ImGui.SameLine();
         if (ImGui.RadioButton("Trilinear", _filter == TexFilter.Trilinear)) _filter = TexFilter.Trilinear;
 
-        
-        if (_man.Skeleton is { } s && s.AnimationCount > 0)
+        if (man.Skeleton is { } s && s.AnimationCount > 0)
         {
             ImGui.Checkbox("Play", ref _play);
             float dur = s.Duration(_animIndex);
@@ -348,12 +306,9 @@ internal sealed class MyGame : EngineHost
 
         ImGui.Checkbox("Follow", ref _follow);
         ImGui.SliderFloat("Yaw offset", ref _yawOffset, -3.14f, 3.14f);
-        ImGui.Text($"Moving: {_moving}");
 
         ImGui.Checkbox("Colliders", ref _showColliders);
         ImGui.SliderFloat("Max step", ref _maxStep, 0.1f, 1.0f);
-        ImGui.Text($"moving={_moving} walk={_walkTime:F2}");
-        ImGui.Text($"pos={_playerPos} target={_playerTarget}");
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -364,17 +319,17 @@ internal sealed class MyGame : EngineHost
         var data = new byte[size * size * 4];
         var rng = new Random(12345);
         for (int y = 0; y < size; y++)
-        for (int x = 0; x < size; x++)
-        {
-            int i = (y * size + x) * 4;
-            bool border = x < 2 || y < 2 || x >= size - 2 || y >= size - 2;
-            float v = (border ? 0.18f : 0.42f) + (float)rng.NextDouble() * 0.06f
-                    + ((x + y) % 8 == 0 ? 0.04f : 0f);
-            data[i + 0] = (byte)(Math.Clamp(v * 0.95f, 0f, 1f) * 255f);
-            data[i + 1] = (byte)(Math.Clamp(v * 1.00f, 0f, 1f) * 255f);
-            data[i + 2] = (byte)(Math.Clamp(v * 1.10f, 0f, 1f) * 255f);
-            data[i + 3] = 255;
-        }
+            for (int x = 0; x < size; x++)
+            {
+                int i = (y * size + x) * 4;
+                bool border = x < 2 || y < 2 || x >= size - 2 || y >= size - 2;
+                float v = (border ? 0.18f : 0.42f) + (float)rng.NextDouble() * 0.06f
+                        + ((x + y) % 8 == 0 ? 0.04f : 0f);
+                data[i + 0] = (byte)(Math.Clamp(v * 0.95f, 0f, 1f) * 255f);
+                data[i + 1] = (byte)(Math.Clamp(v * 1.00f, 0f, 1f) * 255f);
+                data[i + 2] = (byte)(Math.Clamp(v * 1.10f, 0f, 1f) * 255f);
+                data[i + 3] = 255;
+            }
         return data;
     }
 
@@ -422,7 +377,40 @@ internal sealed class MyGame : EngineHost
             p.Mesh.Draw();
             _drawCalls++;
         }
+    }
 
+    private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw, Vector3 tint)
+    {
+        if (model.Primitives.Count == 0) return;
+
+        if (model.Skeleton is { } sk)
+        {
+            _shader.SetUniform("uSkinned", 1);
+            _shader.SetUniformMatrixArray("uJoints[0]", sk.Palette);
+        }
+        else _shader.SetUniform("uSkinned", 0);
+
+        var scaleM = Matrix4x4.CreateScale(scale);
+        float lowest = float.MaxValue;
+        foreach (var p in model.Primitives)
+        {
+            var basis = model.Skeleton is { } s ? s.Palette[0] : p.Transform;
+            lowest = MathF.Min(lowest, LowestY(p.BoundsMin, p.BoundsMax, basis * scaleM));
+        }
+
+        foreach (var p in model.Primitives)
+        {
+            if (p.Texture != null) { p.Texture.Bind(TextureUnit.Texture0); _shader.SetUniform("uUseTexture", 1); }
+            else _shader.SetUniform("uUseTexture", 0);
+
+            var m = p.Transform * scaleM
+                  * Matrix4x4.CreateRotationY(yaw)
+                  * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
+            _shader.SetUniform("uModel", m);
+            _shader.SetUniform("uTint", tint);
+            p.Mesh.Draw();
+            _drawCalls++;
+        }
     }
 
     /// Нижняя точка AABB после преобразования.
@@ -469,6 +457,99 @@ internal sealed class MyGame : EngineHost
         Face(Vector3.UnitZ, new(-h, -h, h), new(h, -h, h), new(h, h, h), new(-h, h, h));
         Face(-Vector3.UnitZ, new(h, -h, -h), new(-h, -h, -h), new(-h, h, -h), new(h, h, -h));
         return new Mesh(gl, v.ToArray(), idx.ToArray());
+    }
+
+    private void InputSystem()
+    {
+        if (_lmbHeld && !_imgui.WantMouse)
+        {
+            _camera.ScreenRay(MouseScreen, out var o, out var d);
+            if (_height.Raycast(o, d, 400f, out var h))
+            {
+                ref var mv = ref _world.Get<Movement>(_player);
+                mv.Target = new Vector3(h.X, 0, h.Z); mv.Moving = true;
+            }
+        }
+    }
+
+    private void MovementSystem(float dt)
+    {
+        var moves = _world.Set<Movement>();
+        var obstacles = _world.Set<ObstacleTag>();
+        foreach (int e in moves.Entities())
+        {
+            ref var mv = ref moves.Get(e);
+            ref var tr = ref _world.Get<Transform>(e);
+            float radius = _world.Get<Collider>(e).Radius;
+
+            if (mv.Moving)
+            {
+                var d = mv.Target - tr.Pos; d.Y = 0; float dist = d.Length();
+                if (dist < 0.05f) mv.Moving = false;
+                else
+                {
+                    var dir = d / dist;
+                    var desired = tr.Pos + dir * MathF.Min(mv.Speed * dt, dist);
+                    if (_height.Sample(desired.X, desired.Z) - tr.Pos.Y <= _maxStep)
+                    {
+                        float lim = (_grid - 1) / 2f * Tile;
+                        desired.X = Math.Clamp(desired.X, -lim, lim);
+                        desired.Z = Math.Clamp(desired.Z, -lim, lim);
+                        foreach (int o in obstacles.Entities())
+                        {
+                            if (o == e) continue;
+                            var ot = _world.Get<Transform>(o); var oc = _world.Get<Collider>(o);
+                            var d2 = new Vector2(desired.X - ot.Pos.X, desired.Z - ot.Pos.Z);
+                            float r = oc.Radius + radius, len = d2.Length();
+                            if (len < r && len > 1e-4f) { var n = d2 / len; desired.X = ot.Pos.X + n.X * r; desired.Z = ot.Pos.Z + n.Y * r; }
+                        }
+                        tr.Pos = desired;
+                        tr.Yaw = MathF.Atan2(dir.X, dir.Z);
+                        mv.Walk += dt;
+                    }
+                    else mv.Moving = false;
+                }
+            }
+            float g = _height.Sample(tr.Pos.X, tr.Pos.Z);
+            tr.Pos.Y += (g - tr.Pos.Y) * (1f - MathF.Exp(-12f * dt));
+        }
+    }
+
+    private void CameraSystem(float dt)
+    {
+        if (!_follow) return;
+        var p = _world.Get<Transform>(_player).Pos;
+        _camera.Target = Vector3.Lerp(_camera.Target, p, 1f - MathF.Exp(-5f * dt));
+    }
+
+    private void RenderSystem()
+    {
+        foreach (int e in _world.Set<Renderable>().Entities())
+        {
+            var r = _world.Get<Renderable>(e);
+            var tr = _world.Get<Transform>(e);
+            if (r.Model != null)
+            {
+                if (r.Model.Skeleton is { } sk)
+                {
+                    bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
+                    if (moving) sk.Play(0, _world.Get<Movement>(e).Walk);
+                    else sk.UpdateBindPose();
+                }
+                DrawModel(r.Model, tr.Pos, r.Scale, tr.Yaw, r.Tint);
+            }
+            else if (r.Mesh != null)
+            {
+                Gl.Disable(EnableCap.CullFace);
+                _shader.SetUniform("uSkinned", 0);
+                _shader.SetUniform("uUseTexture", 1);
+                _tile.Bind(TextureUnit.Texture0);
+                _shader.SetUniform("uModel", Matrix4x4.CreateScale(r.Size) * Matrix4x4.CreateTranslation(tr.Pos));
+                _shader.SetUniform("uTint", r.Tint);
+                r.Mesh.Draw();
+                if (_cull) Gl.Enable(EnableCap.CullFace);
+            }
+        }
     }
 }
 
