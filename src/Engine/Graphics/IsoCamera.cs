@@ -64,4 +64,16 @@ public sealed class IsoCamera
         Target += anchor - ScreenToGround(screen);
         Target.Y = 0f;
     }
+
+    public void ScreenRay(Vector2 screen, out Vector3 origin, out Vector3 dir)
+    {
+        var ndc = new Vector2(2f * screen.X / _fb.X - 1f, 1f - 2f * screen.Y / _fb.Y);
+        Matrix4x4.Invert(ViewProjection, out var inv);
+        var p0 = Vector3.Transform(new Vector3(ndc.X, ndc.Y, -1f), inv);
+        var p1 = Vector3.Transform(new Vector3(ndc.X, ndc.Y, 1f), inv);
+
+        dir = Vector3.Normalize(p1 - p0);      // для орто это ось взгляда (параллельные лучи)
+        if (dir.Y > 0) { dir = -dir; origin = p1; }  // начало — верхний конец, луч всегда вниз
+        else origin = p0;
+    }
 }

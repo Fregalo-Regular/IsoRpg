@@ -2,10 +2,12 @@
 using Engine.Diagnostics;
 using Engine.Graphics;
 using Engine.Platform;
+using Engine.Scene;
 using ImGuiNET;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
+using Silk.NET.Windowing;
 using Engine.Assets;
 //using Mesh = Engine.Graphics.Mesh;
 
@@ -20,7 +22,6 @@ internal sealed class MyGame : EngineHost
     private ImGuiLayer _imgui = null!;
     private IKeyboard _kb = null!;
     private IMouse _mouse = null!;
-
     private Vector3 _clearColor = new(0.07f, 0.08f, 0.10f);
     private bool _wireframe, _cull = true, _depth = true;
     private TexFilter _filter = TexFilter.Trilinear;
@@ -29,7 +30,7 @@ internal sealed class MyGame : EngineHost
     private const float Tile = 2f;
     private GpuProfiler _gpuWorld = null!, _gpuUi = null!;
     private double _cpuMs, _cpuMsAvg;
-    private float _manScale = 1f, _foxScale = 1f, _lightAzimuth = 140f;
+    private float _manScale = 1f, _foxScale = 0.01f, _lightAzimuth = 140f;
     private Vector3 _lightDir = Vector3.Normalize(new Vector3(-0.4f, 1.2f, 0.3f));
     private bool _debugNormals;
     private GltfModel _man = null!, _fox = null!;
@@ -40,6 +41,12 @@ internal sealed class MyGame : EngineHost
     private Vector3 _playerTarget = new(-6f, 0f, 0f);
     private bool _moving, _follow = true;
     private float _playerYaw, _yawOffset, _walkTime;
+    private Heightfield _height = null!;
+    private readonly List<Obstacle> _obstacles = new();
+    private Mesh _crate = null!;
+    private float _maxStep = 0.45f, _playerRadius = 0.35f;
+    private bool _showColliders = true;
+    private bool _lmbHeld;
 
     protected override void OnLoad()
     {
@@ -52,13 +59,20 @@ internal sealed class MyGame : EngineHost
             _camera.ZoomAt(MouseScreen, MathF.Pow(1.15f, -wheel.Y));
         };
 
-        _mouse.MouseDown += (_, b) =>
-        {
-            if (b != MouseButton.Left || _imgui.WantMouse) return;
-            var hit = _camera.ScreenToGround(MouseScreen);
-            _playerTarget = new Vector3(hit.X, 0f, hit.Z);
-            _moving = true;
-        };
+        // _mouse.MouseDown += (_, b) =>
+        // {
+        //     if (_mouse.IsButtonPressed(MouseButton.Left) && !_imgui.WantMouse)
+        //     {
+        //         _camera.ScreenRay(MouseScreen, out var o, out var d);
+        //         if (_height.Raycast(o, d, 400f, out var h))
+        //         {
+        //             _playerTarget = new Vector3(h.X, 0f, h.Z);
+        //             _moving = true;
+        //         }
+        //     }
+        // };
+        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) _lmbHeld = true; };
+        _mouse.MouseUp   += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
 
         _gpuWorld = new GpuProfiler(Gl);
         _gpuUi   = new GpuProfiler(Gl);
@@ -67,6 +81,13 @@ internal sealed class MyGame : EngineHost
         _imgui = new ImGuiLayer(Gl, Input);
         _shader = new ShaderProgram(Gl, "assets/shaders/basic.vert", "assets/shaders/basic.frag");
         _tile = Texture2D.FromRgba(Gl, 64, 64, MakeTileRgba(64));
+
+        _height = new Heightfield(_grid, Tile, Terrace);
+        _crate = MakeCube(Gl);
+        _obstacles.Add(new Obstacle { Pos = new Vector3(-10f, 0f, 4f), R = 0.7f, H = 1.0f });
+        _obstacles.Add(new Obstacle { Pos = new Vector3(-2f, 0f, -10f), R = 0.7f, H = 1.2f });
+        _obstacles.Add(new Obstacle { Pos = new Vector3(8f, 0f, -6f), R = 0.7f, H = 0.8f });
+        _obstacles.Add(new Obstacle { Pos = new Vector3(6f, 0f, 0f), R = 0.6f, H = 0.7f }); // лиса
 
         // Квад лежит в XZ, нормаль +Y (см. вычисление winding выше)
         Vertex[] vertices =
@@ -102,26 +123,59 @@ internal sealed class MyGame : EngineHost
         if (_kb.IsKeyPressed(Key.E)) _camera.Yaw += 1.2f * f;
         if (_play) _animTime += (float)dt;
 
+        if (_lmbHeld && !_imgui.WantMouse)
+        {
+            _camera.ScreenRay(MouseScreen, out var o, out var d);
+            if (_height.Raycast(o, d, 400f, out var h))
+            { _playerTarget = new Vector3(h.X, 0f, h.Z); _moving = true; }
+        }
+
         if (_moving)
         {
-            var d = _playerTarget - _playerPos; d.Y = 0;
-            float dist = d.Length();
+            var d3 = _playerTarget - _playerPos; d3.Y = 0;
+            float dist = d3.Length();
             if (dist < 0.05f) _moving = false;
             else
             {
-                var dir = d / dist;
-                _playerPos += dir * MathF.Min(3f * (float)dt, dist);
-                _playerYaw = MathF.Atan2(dir.X, dir.Z);
-                _walkTime += (float)dt;
+                var dir = d3 / dist;
+                var desired = _playerPos + dir * MathF.Min(3f * (float)dt, dist);
+
+                // предел шага: не лезем на стену выше maxStep
+                if (_height.Sample(desired.X, desired.Z) - _playerPos.Y <= _maxStep)
+                {
+                    // границы поля
+                    float lim = (_grid - 1) / 2f * Tile;
+                    desired.X = Math.Clamp(desired.X, -lim, lim);
+                    desired.Z = Math.Clamp(desired.Z, -lim, lim);
+
+                    // круг-круг: выталкиваем из препятствий
+                    foreach (var ob in _obstacles)
+                    {
+                        var d2 = new Vector2(desired.X - ob.Pos.X, desired.Z - ob.Pos.Z);
+                        float r = ob.R + _playerRadius;
+                        float len = d2.Length();
+                        if (len < r)
+                        {
+                            var n = len > 1e-4f ? d2 / len : new Vector2(1, 0);
+                            desired.X = ob.Pos.X + n.X * r;
+                            desired.Z = ob.Pos.Z + n.Y * r;
+                        }
+                    }
+                    _playerPos = desired;
+                    _playerYaw = MathF.Atan2(dir.X, dir.Z);
+                    _walkTime += (float)dt;
+                }
+                else _moving = false; // упёрлись в стену
             }
         }
+        float g = _height.Sample(_playerPos.X, _playerPos.Z);
+        _playerPos.Y += (g - _playerPos.Y) * (1f - MathF.Exp(-12f * (float)dt));
         if (_follow)
         {
             var want = new Vector3(_playerPos.X, 0f, _playerPos.Z);
             _camera.Target = Vector3.Lerp(_camera.Target, want, 1f - MathF.Exp(-5f * (float)dt));
         }
-        float g = GroundHeight(_playerPos.X, _playerPos.Z);
-        _playerPos.Y += (g - _playerPos.Y) * (1f - MathF.Exp(-12f * (float)dt));
+
     }
 
     protected override void OnResize(Vector2D<int> size) => _camera?.SetViewport(size);
@@ -168,12 +222,30 @@ internal sealed class MyGame : EngineHost
                      (x + z) % 2 == 0 ? Vector3.One : new Vector3(0.72f, 0.76f, 0.85f));
         }
 
-        var hit = _camera.ScreenToGround(MouseScreen);
+        _camera.ScreenRay(MouseScreen, out var ro, out var rd);
+        Vector3 hit = _height.Raycast(ro, rd, 400f, out var hh) ? hh : _camera.ScreenToGround(MouseScreen);
+        
         int hx = (int)MathF.Round(hit.X / Tile + half);
         int hz = (int)MathF.Round(hit.Z / Tile + half);
         if (hx >= 0 && hx < _grid && hz >= 0 && hz < _grid)
             DrawTile((hx - half) * Tile, Terrace(hx, hz) + 0.01f, (hz - half) * Tile,
                      new Vector3(1.6f, 1.3f, 0.6f));
+
+        Gl.Disable(EnableCap.CullFace);
+        _shader.SetUniform("uSkinned", 0);
+        _shader.SetUniform("uUseTexture", 1);
+        _tile.Bind(TextureUnit.Texture0);
+        foreach (var ob in _obstacles)
+        {
+            if (!_showColliders && ob.H < 0.75f) continue; // лису-«препятствие» не рисуем ящиком
+            float gy = _height.Sample(ob.Pos.X, ob.Pos.Z);
+            _shader.SetUniform("uModel",
+                Matrix4x4.CreateScale(ob.R * 2f, ob.H, ob.R * 2f)
+                * Matrix4x4.CreateTranslation(ob.Pos.X, gy, ob.Pos.Z));
+            _shader.SetUniform("uTint", new Vector3(0.8f, 0.6f, 0.35f));
+            _crate.Draw();
+        }
+        if (_cull) Gl.Enable(EnableCap.CullFace);
 
         _shader.SetUniform("uUseTexture", 0);
         if (_man.Skeleton is { } sk)
@@ -277,6 +349,11 @@ internal sealed class MyGame : EngineHost
         ImGui.Checkbox("Follow", ref _follow);
         ImGui.SliderFloat("Yaw offset", ref _yawOffset, -3.14f, 3.14f);
         ImGui.Text($"Moving: {_moving}");
+
+        ImGui.Checkbox("Colliders", ref _showColliders);
+        ImGui.SliderFloat("Max step", ref _maxStep, 0.1f, 1.0f);
+        ImGui.Text($"moving={_moving} walk={_walkTime:F2}");
+        ImGui.Text($"pos={_playerPos} target={_playerTarget}");
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -370,6 +447,28 @@ internal sealed class MyGame : EngineHost
         int ix = Math.Clamp((int)MathF.Floor(x / Tile + half + 0.5f), 0, _grid - 1);
         int iz = Math.Clamp((int)MathF.Floor(z / Tile + half + 0.5f), 0, _grid - 1);
         return Terrace(ix, iz);
+    }
+
+    private static Mesh MakeCube(GL gl)
+    {
+        var v = new List<Vertex>(); var idx = new List<ushort>();
+        void Face(Vector3 n, Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+        {
+            int s = v.Count;
+            v.Add(new Vertex { Position = a, Normal = n, Color = Vector3.One, UV = new(0, 0) });
+            v.Add(new Vertex { Position = b, Normal = n, Color = Vector3.One, UV = new(1, 0) });
+            v.Add(new Vertex { Position = c, Normal = n, Color = Vector3.One, UV = new(1, 1) });
+            v.Add(new Vertex { Position = d, Normal = n, Color = Vector3.One, UV = new(0, 1) });
+            idx.AddRange(new ushort[] { (ushort)s, (ushort)(s + 1), (ushort)(s + 2), (ushort)(s + 2), (ushort)(s + 3), (ushort)s });
+        }
+        float h = 0.5f;
+        Face(Vector3.UnitY, new(-h, h, h), new(h, h, h), new(h, h, -h), new(-h, h, -h));
+        Face(-Vector3.UnitY, new(-h, -h, -h), new(h, -h, -h), new(h, -h, h), new(-h, -h, h));
+        Face(Vector3.UnitX, new(h, -h, h), new(h, -h, -h), new(h, h, -h), new(h, h, h));
+        Face(-Vector3.UnitX, new(-h, -h, -h), new(-h, -h, h), new(-h, h, h), new(-h, h, -h));
+        Face(Vector3.UnitZ, new(-h, -h, h), new(h, -h, h), new(h, h, h), new(-h, h, h));
+        Face(-Vector3.UnitZ, new(h, -h, -h), new(-h, -h, -h), new(-h, h, -h), new(h, h, -h));
+        return new Mesh(gl, v.ToArray(), idx.ToArray());
     }
 }
 
