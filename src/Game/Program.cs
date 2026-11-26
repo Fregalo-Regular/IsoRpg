@@ -159,6 +159,7 @@ internal sealed class MyGame : EngineHost
         AISystem();
         PlayerAttackSystem();
         MovementSystem((float)dt);
+        SeparationSystem();
         CooldownSystem((float)dt);
         NumberSystem((float)dt);
         CameraSystem((float)dt);
@@ -742,6 +743,28 @@ internal sealed class MyGame : EngineHost
             if (d.Length() < pc.Range && Vector3.Dot(Vector3.Normalize(d), fwd) > 0.3f)
                 Hit(m, pc.Damage, pt.Pos);
         }
+    }
+    private void SeparationSystem()
+    {
+        var ids = _world.Set<MobTag>().Entities().ToArray();
+        for (int i = 0; i < ids.Length; i++)
+            for (int j = i + 1; j < ids.Length; j++)
+            {
+                int a = ids[i], b = ids[j];
+                if (_world.Get<Health>(a).Dead || _world.Get<Health>(b).Dead) continue;
+                ref var pa = ref _world.Get<Transform>(a);
+                ref var pb = ref _world.Get<Transform>(b);
+                var d = new Vector2(pb.Pos.X - pa.Pos.X, pb.Pos.Z - pa.Pos.Z);
+                float r = _world.Get<Collider>(a).Radius + _world.Get<Collider>(b).Radius;
+                float len = d.Length();
+                if (len < r)
+                {
+                    var n = len > 1e-4f ? d / len : new Vector2(1, 0);
+                    float push = (r - len) * 0.5f;
+                    pa.Pos.X -= n.X * push; pa.Pos.Z -= n.Y * push;
+                    pb.Pos.X += n.X * push; pb.Pos.Z += n.Y * push;
+                }
+            }
     }
     #endregion
 }
