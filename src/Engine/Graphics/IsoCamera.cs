@@ -76,4 +76,13 @@ public sealed class IsoCamera
         if (dir.Y > 0) { dir = -dir; origin = p1; }  // начало — верхний конец, луч всегда вниз
         else origin = p0;
     }
+
+    public Vector2 WorldToScreen(Vector3 w)
+    {
+        var clip = Vector4.Transform(new Vector4(w, 1f), ViewProjection); // row-vector: v * M
+        var ndc = new Vector3(clip.X / clip.W, clip.Y / clip.W, clip.Z / clip.W);
+        return new Vector2(
+            (ndc.X * 0.5f + 0.5f) * _fb.X,
+            (1f - (ndc.Y * 0.5f + 0.5f)) * _fb.Y);   // Y экрана вниз, NDC вверх
+    }
 }

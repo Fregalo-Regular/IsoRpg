@@ -4,7 +4,7 @@ using Engine.Graphics;
 
 namespace Engine.ECS;
 
-public interface ISparseSet { bool Has(int e); }
+public interface ISparseSet { bool Has(int e); void Remove(int e); }
 
 public sealed class SparseSet<T> : ISparseSet where T : struct
 {
@@ -21,6 +21,13 @@ public sealed class SparseSet<T> : ISparseSet where T : struct
     }
     public ref T Get(int e) => ref _data[_sparse[e]];
     public IEnumerable<int> Entities() => _dense;
+    public void Remove(int e)
+    {
+        if (!_sparse.TryGetValue(e, out int i)) return;
+        int last = _dense.Count - 1;
+        if (i != last) { var le = _dense[last]; _dense[i] = le; _data[i] = _data[last]; _sparse[le] = i; }
+        _dense.RemoveAt(last); _sparse.Remove(e);
+    }
 }
 
 public sealed class World
@@ -36,4 +43,5 @@ public sealed class World
     public ref T Add<T>(int e) where T : struct => ref Set<T>().Add(e);
     public bool Has<T>(int e) where T : struct => Set<T>().Has(e);
     public ref T Get<T>(int e) where T : struct => ref Set<T>().Get(e);
+    public void Destroy(int e) { foreach (var s in _sets.Values) s.Remove(e); }
 }

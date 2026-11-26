@@ -16,7 +16,12 @@ public struct Renderable
     public float Scale;
     public Vector3 Size;       // негабаритный масштаб меша
     public Vector3 Tint;
+    public int AnimIndex;
 }
 public struct PlayerTag { }
 public struct MobTag { }
 public struct ObstacleTag { }
+public struct Combat { public float Cd, Flash, Damage, Range; }
+public struct AI { public float Aggro; }
+public struct Number { public float Val, T; }
+public struct NumberTag { }

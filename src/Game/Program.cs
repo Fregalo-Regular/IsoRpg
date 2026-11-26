@@ -45,7 +45,8 @@ internal sealed class MyGame : EngineHost
     private bool _showColliders = true;
     private bool _lmbHeld;
     private World _world = new();
-    private int _player, _fox;
+    private int _player, _fox0;
+    private Mesh _ring = null!;
 
     protected override void OnLoad()
     {
@@ -68,6 +69,7 @@ internal sealed class MyGame : EngineHost
         _imgui = new ImGuiLayer(Gl, Input);
         _shader = new ShaderProgram(Gl, "assets/shaders/basic.vert", "assets/shaders/basic.frag");
         _tile = Texture2D.FromRgba(Gl, 64, 64, MakeTileRgba(64));
+        _ring = MakeRing(Gl);
 
         _height = new Heightfield(_grid, Tile, Terrace);
         _crate = MakeCube(Gl);
@@ -93,13 +95,15 @@ internal sealed class MyGame : EngineHost
         _world.Add<Renderable>(_player) = new Renderable { Model = man, Scale = _manScale, Tint = Vector3.One };
         _world.Add<PlayerTag>(_player);
 
-        _fox = _world.Create();
-        _world.Add<Transform>(_fox) = new Transform { Pos = new Vector3(6, 0, 0) };
-        _world.Add<Renderable>(_fox) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+        _fox0 = _world.Create();
+        _world.Add<Transform>(_fox0) = new Transform { Pos = new Vector3(6, 0, 0) };
+        _world.Add<Renderable>(_fox0) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+        _world.Add<MobTag>(_fox0) = new MobTag {};
 
-        int m = _world.Create();
-        _world.Add<Transform>(m) = new Transform { Pos = new Vector3(0,0,10) };
-        _world.Add<Renderable>(m) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+        int _fox1 = _world.Create();
+        _world.Add<Transform>(_fox1) = new Transform { Pos = new Vector3(0, 0, 10) };
+        _world.Add<Renderable>(_fox1) = new Renderable { Model = fox, Scale = _foxScale, Tint = Vector3.One };
+        _world.Add<MobTag>(_fox1) = new MobTag {};
 
         foreach (var (p, r, h) in new[] {
             (new Vector3(-10,0,4), 0.7f, 1.0f),
@@ -113,9 +117,23 @@ internal sealed class MyGame : EngineHost
             _world.Add<ObstacleTag>(e);
         }
         // лиса тоже препятствие:
-        _world.Add<Collider>(_fox) = new Collider { Radius = 0.3f };
-        _world.Add<Collider>(m) = new Collider {Radius = 0.3f};
-        _world.Add<ObstacleTag>(_fox); _world.Add<ObstacleTag>(m);
+        _world.Add<Collider>(_fox0) = new Collider { Radius = 0.3f };
+        _world.Add<Collider>(_fox1) = new Collider { Radius = 0.3f };
+        _world.Add<ObstacleTag>(_fox0); _world.Add<ObstacleTag>(_fox1);
+
+        _world.Add<Health>(_player) = new Health { Hp = 100, Max = 100 };
+        _world.Add<Combat>(_player) = new Combat { Damage = 25, Range = 1.8f };
+        _world.Add<Velocity>(_player);
+        _kb.KeyDown += (_, k, _) => { if (k == Key.Space) _attackQueued = true; };
+
+        foreach (int m in _world.Set<MobTag>().Entities())
+        {
+            _world.Add<Health>(m) = new Health { Hp = 60, Max = 60 };
+            _world.Add<Combat>(m) = new Combat { Damage = 8, Range = 1.2f };
+            _world.Add<AI>(m) = new AI { Aggro = 9f };
+            _world.Add<Movement>(m) = new Movement { Speed = 2.5f };
+            _world.Add<Velocity>(m);
+        }
     }
 
     private Vector2 MouseScreen => new(_mouse.Position.X, _mouse.Position.Y);
@@ -138,9 +156,12 @@ internal sealed class MyGame : EngineHost
         if (_play) _animTime += (float)dt;
 
         InputSystem();
+        AISystem();
+        PlayerAttackSystem();
         MovementSystem((float)dt);
+        CooldownSystem((float)dt);
+        NumberSystem((float)dt);
         CameraSystem((float)dt);
-
     }
 
     protected override void OnResize(Vector2D<int> size) => _camera?.SetViewport(size);
@@ -197,6 +218,14 @@ internal sealed class MyGame : EngineHost
                      new Vector3(1.6f, 1.3f, 0.6f));
 
         Gl.Disable(EnableCap.CullFace);
+
+        foreach (int e in _world.Set<MobTag>().Entities())
+        {
+            var h = _world.Get<Health>(e); if (h.Dead) continue;
+            float f = Math.Clamp(h.Hp / h.Max, 0, 1);
+            DrawFloorRing(_world.Get<Transform>(e).Pos, _world.Get<Collider>(e).Radius * 2, f, HpColor(f));
+        }
+
         _shader.SetUniform("uSkinned", 0);
         _shader.SetUniform("uUseTexture", 1);
         _tile.Bind(TextureUnit.Texture0);
@@ -309,6 +338,19 @@ internal sealed class MyGame : EngineHost
 
         ImGui.Checkbox("Colliders", ref _showColliders);
         ImGui.SliderFloat("Max step", ref _maxStep, 0.1f, 1.0f);
+
+        var dl = ImGui.GetBackgroundDrawList();
+        var hp = _world.Get<Health>(_player);
+        float f = Math.Clamp(hp.Hp / hp.Max, 0, 1);
+        float R = 72, m = 20;
+        var c = new Vector2(ImGui.GetIO().DisplaySize.X - m - R, m + R);
+        dl.AddCircle(c, R + 5, 0xFF404040, 48, 12f);          // внешняя рамка (будущий портрет)
+        dl.AddCircle(c, R, 0xAA101010, 48, 16f);             // трек
+        dl.PathClear();
+        dl.PathArcTo(c, R, -MathF.PI / 2, -MathF.PI / 2 + f * 2 * MathF.PI, 48);
+        dl.PathStroke(ImGui.ColorConvertFloat4ToU32(new Vector4(HpColor(f), 1)), 0, 16f);
+        dl.AddText(new Vector2(c.X - 14, c.Y - 7), 0xFFFFFFFF, $"{(int)hp.Hp}");
+        ImGui.Text($"Kills: {_kills}");
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -335,7 +377,7 @@ internal sealed class MyGame : EngineHost
 
     protected override void OnShutdown()
     {
-        _imgui.Dispose(); _tile.Dispose(); _quad.Dispose(); _shader.Dispose(); _gpuWorld.Dispose(); _gpuUi.Dispose();
+        _imgui.Dispose(); _tile.Dispose(); _quad.Dispose(); _shader.Dispose(); _gpuWorld.Dispose(); _gpuUi.Dispose(); _ring.Dispose();
     }
 
     private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw = 0f)
@@ -459,8 +501,52 @@ internal sealed class MyGame : EngineHost
         return new Mesh(gl, v.ToArray(), idx.ToArray());
     }
 
+    private static Mesh MakeRing(GL gl, int seg = 48)
+    {
+        var v = new List<Vertex>(); var idx = new List<ushort>();
+        for (int i = 0; i <= seg; i++)
+        {
+            float t = (float)i / seg, a = t * MathF.PI * 2;
+            float c = MathF.Cos(a), s = MathF.Sin(a);
+            v.Add(new Vertex { Position = new Vector3(c, 0, s), Normal = Vector3.UnitY, Color = Vector3.One, UV = new Vector2(t, 1) });
+            v.Add(new Vertex { Position = new Vector3(c * 0.8f, 0, s * 0.8f), Normal = Vector3.UnitY, Color = Vector3.One, UV = new Vector2(t, 0) });
+        }
+        for (int i = 0; i < seg; i++)
+        { int o = i * 2; idx.AddRange(new ushort[] { (ushort)o, (ushort)(o + 1), (ushort)(o + 2), (ushort)(o + 2), (ushort)(o + 1), (ushort)(o + 3) }); }
+        return new Mesh(gl, v.ToArray(), idx.ToArray());
+    }
+
+    private static Vector3 HpColor(float f) => f > 0.5f
+    ? Vector3.Lerp(new Vector3(0.9f,0.7f,0.2f), new Vector3(0.2f,0.8f,0.3f), (f-0.5f)*2)
+    : Vector3.Lerp(new Vector3(0.8f,0.2f,0.2f), new Vector3(0.9f,0.7f,0.2f), f*2);
+
+    private void DrawFloorRing(Vector3 pos, float radius, float frac, Vector3 col)
+    {
+        _shader.SetUniform("uIsRing", 1);
+        _shader.SetUniform("uUseTexture", 0);
+        _shader.SetUniform("uSkinned", 0);
+        Gl.Disable(EnableCap.CullFace);
+
+        // трек
+        _shader.SetUniform("uModel", Matrix4x4.CreateScale(radius, 1, radius) * Matrix4x4.CreateTranslation(pos.X, pos.Y + 0.02f, pos.Z));
+        _shader.SetUniform("uRingFrac", 1f);
+        _shader.SetUniform("uTint", new Vector3(0.08f, 0.08f, 0.08f));
+        _ring.Draw();
+
+        // заполнение — чуть выше трека, чтобы прошло depth-тест
+        _shader.SetUniform("uModel", Matrix4x4.CreateScale(radius, 1, radius) * Matrix4x4.CreateTranslation(pos.X, pos.Y + 0.04f, pos.Z));
+        _shader.SetUniform("uRingFrac", frac);
+        _shader.SetUniform("uTint", col);
+        _ring.Draw();
+
+        if (_cull) Gl.Enable(EnableCap.CullFace);
+        _shader.SetUniform("uIsRing", 0);
+    }
+
+    #region Системы ECS
     private void InputSystem()
     {
+        if (_world.Get<Health>(_player).Dead) return;
         if (_lmbHeld && !_imgui.WantMouse)
         {
             _camera.ScreenRay(MouseScreen, out var o, out var d);
@@ -478,6 +564,7 @@ internal sealed class MyGame : EngineHost
         var obstacles = _world.Set<ObstacleTag>();
         foreach (int e in moves.Entities())
         {
+            if (_world.Has<Health>(e) && _world.Get<Health>(e).Dead) continue;
             ref var mv = ref moves.Get(e);
             ref var tr = ref _world.Get<Transform>(e);
             float radius = _world.Get<Collider>(e).Radius;
@@ -497,6 +584,12 @@ internal sealed class MyGame : EngineHost
                         desired.Z = Math.Clamp(desired.Z, -lim, lim);
                         foreach (int o in obstacles.Entities())
                         {
+                            if (_world.Has<Velocity>(e))
+                            {
+                                ref var v = ref _world.Get<Velocity>(e);
+                                tr.Pos += v.Vel * dt; v.Vel *= MathF.Exp(-6f * dt);
+                            }
+
                             if (o == e) continue;
                             var ot = _world.Get<Transform>(o); var oc = _world.Get<Collider>(o);
                             var d2 = new Vector2(desired.X - ot.Pos.X, desired.Z - ot.Pos.Z);
@@ -526,17 +619,21 @@ internal sealed class MyGame : EngineHost
     {
         foreach (int e in _world.Set<Renderable>().Entities())
         {
+            if (_world.Has<Health>(e) && _world.Get<Health>(e).Dead) continue;
             var r = _world.Get<Renderable>(e);
             var tr = _world.Get<Transform>(e);
+            var tint = r.Tint;
+            if (_world.Has<Combat>(e) && _world.Get<Combat>(e).Flash > 0) tint = new Vector3(2f, 0.6f, 0.5f);
+
             if (r.Model != null)
             {
                 if (r.Model.Skeleton is { } sk)
                 {
                     bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
-                    if (moving) sk.Play(0, _world.Get<Movement>(e).Walk);
+                    if (moving) sk.Play(r.AnimIndex, _world.Get<Movement>(e).Walk);
                     else sk.UpdateBindPose();
                 }
-                DrawModel(r.Model, tr.Pos, r.Scale, tr.Yaw, r.Tint);
+                DrawModel(r.Model, tr.Pos, r.Scale, tr.Yaw, tint);
             }
             else if (r.Mesh != null)
             {
@@ -549,8 +646,104 @@ internal sealed class MyGame : EngineHost
                 r.Mesh.Draw();
                 if (_cull) Gl.Enable(EnableCap.CullFace);
             }
+            if (_world.Has<Health>(e) && _world.Get<Health>(e).Dead) continue;
+            if (_world.Has<Combat>(e) && _world.Get<Combat>(e).Flash > 0) tint = new Vector3(2f, 0.6f, 0.5f);
         }
     }
+
+    private bool _attackQueued; private int _kills;
+
+    private void SpawnNumber(Vector3 pos, float val)
+    {
+        int e = _world.Create();
+        _world.Add<Transform>(e) = new Transform { Pos = pos };
+        _world.Add<Number>(e) = new Number { Val = val };
+        _world.Add<NumberTag>(e);
+    }
+
+    private void Hit(int target, float dmg, Vector3 from)
+    {
+        ref var h = ref _world.Get<Health>(target);
+        ref var c = ref _world.Get<Combat>(target);
+        var t = _world.Get<Transform>(target);
+        h.Hp -= dmg; c.Flash = 0.15f;
+        var kb = t.Pos - from; kb.Y = 0;
+        if (kb.Length() > 1e-4f) _world.Get<Velocity>(target).Vel += Vector3.Normalize(kb) * 6f;
+        SpawnNumber(t.Pos + Vector3.UnitY * 1.4f, dmg);
+        if (h.Hp <= 0) { h.Dead = true; h.Respawn = 3f; if (_world.Has<MobTag>(target)) _kills++; }
+    }
+
+    private void CooldownSystem(float dt)
+    {
+        foreach (int e in _world.Set<Combat>().Entities())
+        {
+            ref var c = ref _world.Get<Combat>(e);
+            c.Cd = MathF.Max(0, c.Cd - dt);
+            c.Flash = MathF.Max(0, c.Flash - dt);
+        }
+        foreach (int e in _world.Set<Health>().Entities())
+        {
+            ref var h = ref _world.Get<Health>(e);
+            if (!h.Dead) continue;
+            h.Respawn -= dt;
+            if (h.Respawn <= 0)
+            {
+                h.Dead = false; h.Hp = h.Max;
+                _world.Get<Transform>(e).Pos = _world.Has<PlayerTag>(e) ? new Vector3(-6, 0, 0) : new Vector3(10, 0, 8);
+                _world.Get<Velocity>(e).Vel = Vector3.Zero;
+            }
+        }
+    }
+
+    private void NumberSystem(float dt)
+    {
+        var nums = _world.Set<Number>();
+        var ids = nums.Entities().ToArray();
+        foreach (int e in ids)
+        {
+            if (!nums.Has(e)) continue;
+            ref var n = ref nums.Get(e);
+            n.T += dt;
+            if (n.T > 0.8f) _world.Destroy(e);
+        }
+    }
+
+    private void AISystem()
+    {
+        var pt = _world.Get<Transform>(_player).Pos;
+        bool playerDead = _world.Get<Health>(_player).Dead;
+        foreach (int m in _world.Set<MobTag>().Entities())
+        {
+            if (_world.Get<Health>(m).Dead) continue;
+            ref var mv = ref _world.Get<Movement>(m);
+            ref var c = ref _world.Get<Combat>(m);
+            var to = pt - _world.Get<Transform>(m).Pos; to.Y = 0; float dist = to.Length();
+            if (!playerDead && dist < _world.Get<AI>(m).Aggro)
+            {
+                if (dist > c.Range) { mv.Target = pt; mv.Moving = true; }
+                else { mv.Moving = false; if (c.Cd <= 0) { c.Cd = 1f; Hit(_player, c.Damage, _world.Get<Transform>(m).Pos); } }
+            }
+            else mv.Moving = false;
+        }
+    }
+
+    private void PlayerAttackSystem()
+    {
+        if (!_attackQueued) return; _attackQueued = false;
+        ref var pc = ref _world.Get<Combat>(_player);
+        if (pc.Cd > 0 || _world.Get<Health>(_player).Dead) return;
+        pc.Cd = 0.45f;
+        var pt = _world.Get<Transform>(_player);
+        var fwd = new Vector3(MathF.Sin(pt.Yaw), 0, MathF.Cos(pt.Yaw));
+        foreach (int m in _world.Set<MobTag>().Entities())
+        {
+            if (_world.Get<Health>(m).Dead) continue;
+            var d = _world.Get<Transform>(m).Pos - pt.Pos; d.Y = 0;
+            if (d.Length() < pc.Range && Vector3.Dot(Vector3.Normalize(d), fwd) > 0.3f)
+                Hit(m, pc.Damage, pt.Pos);
+        }
+    }
+    #endregion
 }
 
 internal static class Program

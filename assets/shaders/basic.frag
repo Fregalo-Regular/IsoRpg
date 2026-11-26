@@ -10,11 +10,20 @@ uniform float uUvScale;
 uniform int   uUseTexture;
 uniform vec3  uLightDir;
 uniform int   uDebugNormals;
+uniform int   uIsRing;
+uniform float uRingFrac;
 
 out vec4 FragColor;
 
 void main()
 {
+    if (uIsRing != 0)
+    {
+        if (vUV.x > uRingFrac) discard;
+        FragColor = vec4(uTint, 1.0);   // без освещения, чистый цвет
+        return;
+    }
+
     vec3 N = normalize(vNormal);
 
     if (uDebugNormals != 0)
