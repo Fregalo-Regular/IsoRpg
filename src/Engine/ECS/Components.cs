@@ -25,3 +25,4 @@ public struct Combat { public float Cd, Flash, Damage, Range; }
 public struct AI { public float Aggro; }
 public struct Number { public float Val, T; }
 public struct NumberTag { }
+public struct AttackTarget { public int Entity; public bool Active; }

@@ -47,6 +47,8 @@ internal sealed class MyGame : EngineHost
     private World _world = new();
     private int _player, _fox0;
     private Mesh _ring = null!;
+    private bool _lmbEdge = false;
+    private int _foxClip = 2;
 
     protected override void OnLoad()
     {
@@ -134,6 +136,13 @@ internal sealed class MyGame : EngineHost
             _world.Add<Movement>(m) = new Movement { Speed = 2.5f };
             _world.Add<Velocity>(m);
         }
+
+        _world.Add<AttackTarget>(_player);
+        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) { _lmbHeld = true; _lmbEdge = true; } };
+        _mouse.MouseUp   += (_, b) => { if (b == MouseButton.Left) { _lmbHeld = false; _world.Get<AttackTarget>(_player).Active = false; } };
+
+        foreach (int e in _world.Set<MobTag>().Entities())
+            _world.Get<Renderable>(e).AnimIndex = _foxClip;
     }
 
     private Vector2 MouseScreen => new(_mouse.Position.X, _mouse.Position.Y);
@@ -156,6 +165,7 @@ internal sealed class MyGame : EngineHost
         if (_play) _animTime += (float)dt;
 
         InputSystem();
+        AutoAttackSystem();
         AISystem();
         PlayerAttackSystem();
         MovementSystem((float)dt);
@@ -217,6 +227,10 @@ internal sealed class MyGame : EngineHost
         if (hx >= 0 && hx < _grid && hz >= 0 && hz < _grid)
             DrawTile((hx - half) * Tile, Terrace(hx, hz) + 0.01f, (hz - half) * Tile,
                      new Vector3(1.6f, 1.3f, 0.6f));
+
+        var at = _world.Get<AttackTarget>(_player);
+        if (at.Active && !_world.Get<Health>(at.Entity).Dead)
+            DrawFloorRing(_world.Get<Transform>(at.Entity).Pos, _world.Get<Collider>(at.Entity).Radius * 2.4f, 1f, new Vector3(1, 1, 1));
 
         Gl.Disable(EnableCap.CullFace);
 
@@ -352,6 +366,7 @@ internal sealed class MyGame : EngineHost
         dl.PathStroke(ImGui.ColorConvertFloat4ToU32(new Vector4(HpColor(f), 1)), 0, 16f);
         dl.AddText(new Vector2(c.X - 14, c.Y - 7), 0xFFFFFFFF, $"{(int)hp.Hp}");
         ImGui.Text($"Kills: {_kills}");
+
         ImGui.End();
 
         _imgui.EndFrame(FramebufferSize);
@@ -544,19 +559,57 @@ internal sealed class MyGame : EngineHost
         _shader.SetUniform("uIsRing", 0);
     }
 
+    private int PickMob(Vector3 o, Vector3 d)
+    {
+        int best = -1; float bestT = float.MaxValue;
+        foreach (int m in _world.Set<MobTag>().Entities())
+        {
+            if (_world.Get<Health>(m).Dead) continue;
+            var c = _world.Get<Transform>(m).Pos + Vector3.UnitY * 0.5f;
+            float r = _world.Get<Collider>(m).Radius * 1.5f;
+            float t = Vector3.Dot(c - o, d); if (t < 0) continue;
+            if (((o + d * t) - c).Length() < r && t < bestT) { bestT = t; best = m; }
+        }
+        return best;
+    }
+
+    private void PerformAttack(int attacker)
+    {
+        ref var c = ref _world.Get<Combat>(attacker);
+        if (c.Cd > 0) return;
+        c.Cd = 0.45f;
+        var ap = _world.Get<Transform>(attacker);
+        var fwd = new Vector3(MathF.Sin(ap.Yaw), 0, MathF.Cos(ap.Yaw));
+        foreach (int m in _world.Set<MobTag>().Entities())
+        {
+            if (_world.Get<Health>(m).Dead) continue;
+            var d = _world.Get<Transform>(m).Pos - ap.Pos; d.Y = 0;
+            if (d.Length() < c.Range && Vector3.Dot(Vector3.Normalize(d), fwd) > 0.3f)
+                Hit(m, c.Damage, ap.Pos);
+        }
+    }
+
     #region Системы ECS
     private void InputSystem()
     {
-        if (_world.Get<Health>(_player).Dead) return;
-        if (_lmbHeld && !_imgui.WantMouse)
+        ref var at = ref _world.Get<AttackTarget>(_player);
+        _camera.ScreenRay(MouseScreen, out var o, out var d);
+
+        if (_lmbEdge)
         {
-            _camera.ScreenRay(MouseScreen, out var o, out var d);
-            if (_height.Raycast(o, d, 400f, out var h))
+            _lmbEdge = false;
+            int mob = PickMob(o, d);
+            if (mob >= 0) { at.Entity = mob; at.Active = true; }
+            else
             {
-                ref var mv = ref _world.Get<Movement>(_player);
-                mv.Target = new Vector3(h.X, 0, h.Z); mv.Moving = true;
+                at.Active = false;
+                if (_height.Raycast(o, d, 400f, out var h))
+                { ref var mv = ref _world.Get<Movement>(_player); mv.Target = new Vector3(h.X, 0, h.Z); mv.Moving = true; }
             }
         }
+        // hold-to-move только когда НЕ атакуем
+        if (_lmbHeld && !at.Active && !_imgui.WantMouse && _height.Raycast(o, d, 400f, out var h2))
+        { ref var mv = ref _world.Get<Movement>(_player); mv.Target = new Vector3(h2.X, 0, h2.Z); mv.Moving = true; }
     }
 
     private void MovementSystem(float dt)
@@ -765,6 +818,21 @@ internal sealed class MyGame : EngineHost
                     pb.Pos.X += n.X * push; pb.Pos.Z += n.Y * push;
                 }
             }
+    }
+
+    private void AutoAttackSystem()
+    {
+        ref var at = ref _world.Get<AttackTarget>(_player);
+        if (!at.Active || !_lmbHeld || _world.Get<Health>(_player).Dead) return;
+        int t = at.Entity;
+        if (!_world.Has<Health>(t) || _world.Get<Health>(t).Dead) { at.Active = false; return; }
+
+        ref var mv = ref _world.Get<Movement>(_player);
+        ref var pt = ref _world.Get<Transform>(_player);
+        var d = _world.Get<Transform>(t).Pos - pt.Pos; d.Y = 0;
+        pt.Yaw = MathF.Atan2(d.X, d.Z);                       // всегда лицом к цели
+        if (d.Length() > _world.Get<Combat>(_player).Range) { mv.Target = _world.Get<Transform>(t).Pos; mv.Moving = true; }
+        else { mv.Moving = false; PerformAttack(_player); }
     }
     #endregion
 }

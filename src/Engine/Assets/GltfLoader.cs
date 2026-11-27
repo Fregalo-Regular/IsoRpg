@@ -219,4 +219,11 @@ public static class GltfLoader
         Dump("Material", mat);
         if (mat != null) foreach (var ch in mat.Channels) Dump("Channel:" + ch.Key, ch);
     }
+
+    public static void ProbeAnims(string path)
+    {
+        var m = ModelRoot.Load(AssetPath.Resolve(path));
+        foreach (var a in m.LogicalAnimations)
+            Console.WriteLine($"{path} anim {a.LogicalIndex} name={a.GetType().GetProperty("Name")?.GetValue(a)} dur={a.Duration:F2}");
+    }
 }
