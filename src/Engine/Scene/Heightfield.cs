@@ -44,6 +44,11 @@ public sealed class Heightfield
         }
         return false;
     }
+    public bool Raycast(Vector3 o, Vector3 d, out Vector3 hit)
+        => Raycast(o, d, 400f, out hit);
+
+    public Vector3 Raycast(Vector3 o, Vector3 d)
+    => Raycast(o, d, 400f, out var h) ? h : Vector3.Zero;
 }
 
 public sealed class Obstacle

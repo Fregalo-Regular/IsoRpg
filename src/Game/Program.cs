@@ -49,6 +49,10 @@ internal sealed class MyGame : EngineHost
     private Mesh _ring = null!;
     private bool _lmbEdge = false;
     private int _foxClip = 2;
+    private static readonly (string Name, float Cd, float Range)[] _defs =
+    { ("Bolt", 2f, 12), ("Nova", 5f, 4), ("Heal", 6f, 0) };
+    private int _selectedAbility, _maxCharges = 1;
+    private bool _rmbEdge;
 
     protected override void OnLoad()
     {
@@ -143,6 +147,20 @@ internal sealed class MyGame : EngineHost
 
         foreach (int e in _world.Set<MobTag>().Entities())
             _world.Get<Renderable>(e).AnimIndex = _foxClip;
+
+        _world.Add<Abilities>(_player) = new Abilities
+        {
+            A0 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[0].Cd },
+            A1 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[1].Cd },
+            A2 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[2].Cd },
+        };
+        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Right) _rmbEdge = true; };
+        _kb.KeyDown += (_, k, _) =>
+        {
+            if (k == Key.Number1) _selectedAbility = 0;
+            if (k == Key.Number2) _selectedAbility = 1;
+            if (k == Key.Number3) _selectedAbility = 2;
+        };
     }
 
     private Vector2 MouseScreen => new(_mouse.Position.X, _mouse.Position.Y);
@@ -166,10 +184,13 @@ internal sealed class MyGame : EngineHost
 
         InputSystem();
         AutoAttackSystem();
+        CastSystem();
         AISystem();
-        PlayerAttackSystem();
+        //PlayerAttackSystem();
         MovementSystem((float)dt);
         SeparationSystem();
+        ProjectileSystem((float)dt);
+        EffectSystem((float)dt);
         CooldownSystem((float)dt);
         NumberSystem((float)dt);
         CameraSystem((float)dt);
@@ -239,6 +260,13 @@ internal sealed class MyGame : EngineHost
             var h = _world.Get<Health>(e); if (h.Dead) continue;
             float f = Math.Clamp(h.Hp / h.Max, 0, 1);
             DrawFloorRing(_world.Get<Transform>(e).Pos, _world.Get<Collider>(e).Radius * 2, f, HpColor(f));
+        }
+
+        foreach (int e in _world.Set<Effect>().Entities())
+        {
+            var f = _world.Get<Effect>(e);
+            float r = f.Radius * (f.T / f.Dur);
+            DrawFloorRing(_world.Get<Transform>(e).Pos, r, 1f, new Vector3(0.3f, 0.6f, 1f));
         }
 
         _shader.SetUniform("uSkinned", 0);
@@ -366,6 +394,26 @@ internal sealed class MyGame : EngineHost
         dl.PathStroke(ImGui.ColorConvertFloat4ToU32(new Vector4(HpColor(f), 1)), 0, 16f);
         dl.AddText(new Vector2(c.X - 14, c.Y - 7), 0xFFFFFFFF, $"{(int)hp.Hp}");
         ImGui.Text($"Kills: {_kills}");
+
+        dl = ImGui.GetBackgroundDrawList();
+        ref var ab = ref _world.Get<Abilities>(_player);
+        for (int i = 0; i < 3; i++)
+        {
+            c = AbilityCenter(i);
+            var st = i == 0 ? ab.A0 : i == 1 ? ab.A1 : ab.A2;
+            dl.AddCircleFilled(c, 28, 0xCC181818, 32);
+            dl.AddCircle(c, 28, i == _selectedAbility ? 0xFFE0B040 : 0xFF606060, 32, i == _selectedAbility ? 3f : 1.5f);
+            dl.AddText(c + new Vector2(-4, -22), 0xFFFFFFFF, (i + 1).ToString());
+            dl.AddText(c + new Vector2(-14, -6), 0xFFFFFFFF, _defs[i].Name);
+            dl.AddText(c + new Vector2(-4, 8), 0xFFFFFFFF, st.Charges.ToString());
+            if (st.Charges < st.Max)
+            {
+                dl.PathClear();
+                dl.PathArcTo(c, 24, -MathF.PI / 2, -MathF.PI / 2 + (st.Regen / st.Cd) * 2 * MathF.PI, 32);
+                dl.PathStroke(0xFF8080FF, 0, 3f);
+            }
+        }
+        ImGui.SliderInt("Max charges", ref _maxCharges, 1, 5);   // тест прокачки
 
         ImGui.End();
 
@@ -589,6 +637,24 @@ internal sealed class MyGame : EngineHost
         }
     }
 
+    private Vector2 AbilityCenter(int i)
+    {
+        var io = ImGui.GetIO();
+        float R = 28, gap = 18, total = 3 * (2 * R + gap);
+        return new Vector2(io.DisplaySize.X / 2 - total / 2 + R + i * (2 * R + gap), io.DisplaySize.Y - R - 20);
+    }
+    private int HitAbilityCircle(Vector2 p)
+    {
+        for (int i = 0; i < 3; i++) if ((p - AbilityCenter(i)).Length() <= 28) return i;
+        return -1;
+    }
+    private static ref AbilityState AbilityRef(ref Abilities ab, int i)
+    {
+        if (i == 0) return ref ab.A0;
+        if (i == 1) return ref ab.A1;
+        return ref ab.A2;
+    }
+
     #region Системы ECS
     private void InputSystem()
     {
@@ -598,8 +664,10 @@ internal sealed class MyGame : EngineHost
         if (_lmbEdge)
         {
             _lmbEdge = false;
+            int ui = HitAbilityCircle(MouseScreen);
             int mob = PickMob(o, d);
-            if (mob >= 0) { at.Entity = mob; at.Active = true; }
+            if (ui >= 0) { _selectedAbility = ui; _lmbHeld = false; }  // не двигаем/не атакуем
+            else if (mob >= 0) { at.Entity = mob; at.Active = true; }
             else
             {
                 at.Active = false;
@@ -707,11 +775,16 @@ internal sealed class MyGame : EngineHost
 
     private bool _attackQueued; private int _kills;
 
+    public struct Number { public float Val, T; public Vector3 Color; }
+
     private void SpawnNumber(Vector3 pos, float val)
+        => SpawnNumber(pos, val, new Vector3(1f, 0.9f, 0.4f));   // жёлтый по умолчанию
+
+    private void SpawnNumber(Vector3 pos, float val, Vector3 color)
     {
         int e = _world.Create();
         _world.Add<Transform>(e) = new Transform { Pos = pos };
-        _world.Add<Number>(e) = new Number { Val = val };
+        _world.Add<Number>(e) = new Number { Val = val, Color = color };
         _world.Add<NumberTag>(e);
     }
 
@@ -746,6 +819,18 @@ internal sealed class MyGame : EngineHost
                 _world.Get<Transform>(e).Pos = _world.Has<PlayerTag>(e) ? new Vector3(-6, 0, 0) : new Vector3(10, 0, 8);
                 _world.Get<Velocity>(e).Vel = Vector3.Zero;
             }
+        }
+        ref var ab = ref _world.Get<Abilities>(_player);
+        for (int i = 0; i < 3; i++)
+        {
+            ref var st = ref AbilityRef(ref ab, i); 
+            st.Max = _maxCharges;                       // позже — от уровня способности
+            if (st.Charges < st.Max)
+            {
+                st.Regen += dt;
+                if (st.Regen >= st.Cd) { st.Regen -= st.Cd; st.Charges++; }
+            }
+            else st.Regen = 0;
         }
     }
 
@@ -833,6 +918,77 @@ internal sealed class MyGame : EngineHost
         pt.Yaw = MathF.Atan2(d.X, d.Z);                       // всегда лицом к цели
         if (d.Length() > _world.Get<Combat>(_player).Range) { mv.Target = _world.Get<Transform>(t).Pos; mv.Moving = true; }
         else { mv.Moving = false; PerformAttack(_player); }
+    }
+
+    private void CastSystem()
+    {
+        if (!_rmbEdge) return; _rmbEdge = false;
+        if (_world.Get<Health>(_player).Dead) return;
+        var def = _defs[_selectedAbility];
+        ref var ab = ref _world.Get<Abilities>(_player);
+        ref var st = ref AbilityRef(ref ab, _selectedAbility);
+        if (st.Charges <= 0) return;
+        st.Charges--;
+        var pp = _world.Get<Transform>(_player).Pos;
+
+        if (_selectedAbility == 0)
+        {
+            var at = _world.Get<AttackTarget>(_player);
+            _camera.ScreenRay(MouseScreen, out var ro, out var rd);
+            Vector3 aim = at.Active
+                ? _world.Get<Transform>(at.Entity).Pos
+                : (_height.Raycast(ro, rd, out var h) ? h : pp + Vector3.UnitZ);
+            var dir = aim - pp; dir.Y = 0; dir = Vector3.Normalize(dir);
+            int e = _world.Create();
+            _world.Add<Transform>(e) = new Transform { Pos = pp + Vector3.UnitY + dir * 0.6f };
+            _world.Add<Velocity>(e) = new Velocity { Vel = dir * 14f };
+            _world.Add<Projectile>(e) = new Projectile { Damage = 40, Radius = 0.5f, Life = 2f };
+            _world.Add<Renderable>(e) = new Renderable { Mesh = _crate, Size = new Vector3(0.3f, 0.3f, 0.3f), Tint = new Vector3(2f, 0.8f, 0.2f) };
+        }
+        else if (_selectedAbility == 1)
+        {
+            foreach (int m in _world.Set<MobTag>().Entities())
+                if (!_world.Get<Health>(m).Dead && (_world.Get<Transform>(m).Pos - pp).Length() < def.Range)
+                    Hit(m, 30, pp);
+            int e = _world.Create();
+            _world.Add<Transform>(e) = new Transform { Pos = pp };
+            _world.Add<Effect>(e) = new Effect { Dur = 0.4f, Radius = def.Range };
+        }
+        else
+        {
+            ref var h = ref _world.Get<Health>(_player);
+            h.Hp = MathF.Min(h.Max, h.Hp + 40);
+            SpawnNumber(pp + Vector3.UnitY * 1.6f, 40, new Vector3(0.3f, 1f, 0.4f));
+        }
+    }
+    private Vector3 ScreenRayDir() { _camera.ScreenRay(MouseScreen, out var o, out var d); return d; }
+
+    private void ProjectileSystem(float dt)
+    {
+        var ids = _world.Set<Projectile>().Entities().ToArray();
+        foreach (int e in ids)
+        {
+            if (!_world.Has<Projectile>(e)) continue;
+            ref var p = ref _world.Get<Projectile>(e);
+            ref var tr = ref _world.Get<Transform>(e);
+            tr.Pos += _world.Get<Velocity>(e).Vel * dt;
+            p.Life -= dt;
+            bool dead = p.Life <= 0;
+            foreach (int m in _world.Set<MobTag>().Entities())
+            {
+                if (_world.Get<Health>(m).Dead) continue;
+                if ((_world.Get<Transform>(m).Pos + Vector3.UnitY * 0.5f - tr.Pos).Length() < p.Radius + _world.Get<Collider>(m).Radius)
+                { Hit(m, p.Damage, tr.Pos); dead = true; break; }
+            }
+            if (dead) _world.Destroy(e);
+        }
+    }
+
+    private void EffectSystem(float dt)
+    {
+        var ids = _world.Set<Effect>().Entities().ToArray();
+        foreach (int e in ids)
+        { ref var f = ref _world.Get<Effect>(e); f.T += dt; if (f.T > f.Dur) _world.Destroy(e); }
     }
     #endregion
 }
