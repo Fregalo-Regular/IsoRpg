@@ -1,0 +1,13 @@
+{
+  "player": { "model": "assets/models/CesiumMan.glb", "pos": [-6,0,0], "scale": 1, "hp": 100 },
+  "mobs": [
+    { "model": "assets/models/Fox.glb", "pos": [10,0,8],  "scale": 0.01, "hp": 60, "pack": 1, "aggro": 9 },
+    { "model": "assets/models/Fox.glb", "pos": [12,0,-4], "scale": 0.01, "hp": 60, "pack": 1, "aggro": 9 },
+    { "model": "assets/models/Fox.glb", "pos": [4,0,12],  "scale": 0.01, "hp": 60, "pack": 2, "aggro": 9 }
+  ],
+  "props": [
+    { "pos": [-10,0,4],  "radius": 0.7, "height": 1.0 },
+    { "pos": [-2,0,-10], "radius": 0.7, "height": 1.2 },
+    { "pos": [8,0,-6],   "radius": 0.7, "height": 0.8 }
+  ]
+}
