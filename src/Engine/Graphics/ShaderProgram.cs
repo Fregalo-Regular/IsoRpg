@@ -36,7 +36,6 @@ public sealed class ShaderProgram : IDisposable
 
     public void SetUniform(string name, Vector3 value)
     {
-        //int location = _gl.GetUniformLocation(Handle, name);
         int location = Location(name); 
         if (location >= 0) _gl.Uniform3(location, value.X, value.Y, value.Z);
     }

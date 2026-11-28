@@ -23,9 +23,6 @@ public static class GltfLoader
     public static GltfModel Load(GL gl, string relativePath)
     {
         var model = ModelRoot.Load(AssetPath.Resolve(relativePath));
-        
-        //ProbeChannelMethods(model);
-        //ProbeMaterial(model);
 
         var result = new List<GltfPrimitive>();
 

@@ -57,7 +57,7 @@ internal partial class MyGame
                 if (dist < 0.05f) mv.Moving = false;
                 else
                 {
-                    float speed = mv.Speed * (e == _player && _shiftHeld ? 0.5f : 1f);
+                    float speed = mv.Speed * (e == _player && _shiftHeld ? 0.75f : 1.75f);
                     var dir = d / dist;
                     var desired = tr.Pos + dir * MathF.Min(speed * dt, dist);
                     if (_height.Sample(desired.X, desired.Z) - tr.Pos.Y <= _maxStep)
@@ -288,35 +288,25 @@ internal partial class MyGame
 
         PlayOneShot(_player, def.Clip);
 
-        if (_selectedAbility == 0)
-        {
-            var dir = aim - pp; dir.Y = 0;
-            float yaw = _world.Get<Transform>(_player).Yaw;
-            dir = dir.LengthSquared() > 1e-6f
-                ? Vector3.Normalize(dir)
-                : new Vector3(MathF.Sin(yaw), 0, MathF.Cos(yaw));   // курсор точно на игроке
+        float dur = PlayOneShot(_player, def.Clip);
 
-            int e = _world.Create();
-            _world.Add<Transform>(e) = new Transform { Pos = pp + Vector3.UnitY + dir * 0.6f };
-            _world.Add<Velocity>(e) = new Velocity { Vel = dir * 14f };
-            _world.Add<Projectile>(e) = new Projectile { Damage = 40, Radius = 0.5f, Life = 2f };
-            _world.Add<Renderable>(e) = new Renderable { Mesh = _quad, Size = new Vector3(0.3f), Tint = new Vector3(2f, 0.8f, 0.2f) };
-        }
-        else if (_selectedAbility == 1)
+        var dir = aim - pp; dir.Y = 0;
+        float yaw = _world.Get<Transform>(_player).Yaw;
+        dir = dir.LengthSquared() > 1e-6f
+            ? Vector3.Normalize(dir)
+            : new Vector3(MathF.Sin(yaw), 0, MathF.Cos(yaw));
+
+        var action = new PendingAction
         {
-            foreach (int m in _world.Set<MobTag>().Entities())
-                if (!_world.Get<Health>(m).Dead && (_world.Get<Transform>(m).Pos - pp).Length() < def.Range)
-                    Hit(m, 30, pp);
-            int e = _world.Create();
-            _world.Add<Transform>(e) = new Transform { Pos = pp };
-            _world.Add<Effect>(e) = new Effect { Dur = 0.4f, Radius = def.Range };
-        }
-        else
-        {
-            ref var h = ref _world.Get<Health>(_player);
-            h.Hp = MathF.Min(h.Max, h.Hp + 40);
-            SpawnNumber(pp + Vector3.UnitY * 1.6f, 40, new Vector3(0.3f, 1f, 0.4f));
-        }
+            Kind = _selectedAbility + 1,
+            At = HitAtFor(def.Clip),
+            Damage = def.Power,
+            Range = def.Range,
+            Dir = dir,
+        };
+
+        if (dur <= 0) ExecuteAction(_player, action);          // нет клипа — работаем по-старому
+        else _world.Get<PendingAction>(_player) = action;
     }
 
     private Vector3 AimPoint(Vector3 from)
@@ -393,5 +383,29 @@ internal partial class MyGame
         ref var a = ref _world.Get<AnimState>(e);
         a.Clip = clip; a.Time = 0; a.Loop = false; a.Lock = sk.Duration(clip);
         return a.Lock;
+    }
+
+    private void ActionSystem()
+    {
+        var acts = _world.Set<PendingAction>();
+        foreach (int e in acts.Entities().ToArray())
+        {
+            if (!acts.Has(e)) continue;
+            ref var slot = ref acts.Get(e);
+            if (slot.Fired) continue;
+
+            bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
+            var model = _world.Get<Renderable>(e).Model;
+            if (dead || model?.Skeleton is not { } sk || !_world.Has<AnimState>(e))
+            { slot.Fired = true; continue; }        // смерть отменяет замах
+
+            var a = _world.Get<AnimState>(e);
+            float dur = sk.Duration(a.Clip);
+            if (dur <= 0 || a.Time < slot.At * dur) continue;
+
+            var action = slot;      // копия: Execute создаёт сущности, ref может протухнуть
+            slot.Fired = true;
+            ExecuteAction(e, action);
+        }
     }
 }

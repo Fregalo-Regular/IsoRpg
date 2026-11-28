@@ -190,7 +190,6 @@ public sealed class Skeleton
             worst = MathF.Max(worst, (Vector3.Transform(Vector3.Zero, mine) - Vector3.Transform(Vector3.Zero, lib)).Length());
             worst = MathF.Max(worst, (Vector3.Transform(Vector3.UnitZ, mine) - Vector3.Transform(Vector3.UnitZ, lib)).Length());
         }
-        //Console.WriteLine(String.Format("worst: {0}", worst.ToString()));
         return worst;
     }
 }

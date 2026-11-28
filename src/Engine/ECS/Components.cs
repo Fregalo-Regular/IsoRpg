@@ -23,7 +23,6 @@ public struct MobTag { }
 public struct ObstacleTag { }
 public struct Combat { public float Cd, Flash, Damage, Range; }
 public struct AI { public float Aggro; public bool Angry; }
-//public struct Number { public float Val, T; }
 public struct NumberTag { }
 public struct AttackTarget { public int Entity; public bool Active; }
 public struct AbilityState { public int Charges, Max; public float Regen, Cd; }
@@ -39,3 +38,11 @@ public struct AnimState
     public float Lock;  // остаток времени непрерываемого клипа (атака/смерть)
 }
 public struct Number { public float Val, T; public Vector3 Color; }
+public struct PendingAction
+{
+    public int Kind;        // 0 melee, 1 bolt, 2 nova, 3 heal
+    public float At;        // доля клипа, на которой срабатывает эффект
+    public float Damage, Range;
+    public Vector3 Dir;     // направление снаряда, фиксируется в момент нажатия
+    public bool Fired;
+}

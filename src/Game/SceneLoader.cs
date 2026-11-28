@@ -81,6 +81,7 @@ public static class SceneLoader
         var model = Model(gl, c, d.Model);
         w.Add<Renderable>(e) = new Renderable { Model = model, Scale = d.Scale, Tint = Vector3.One, AnimIndex = 0 };
         w.Add<AnimState>(e) = new AnimState { Clip = model.Anims.TryGetValue("idle01", out var idle) ? idle : 0, Loop = true };
+        w.Add<PendingAction>(e) = new PendingAction { Fired = true };
         w.Add<PlayerTag>(e);
         return e;
     }

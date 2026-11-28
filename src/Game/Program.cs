@@ -50,11 +50,21 @@ internal partial class MyGame : EngineHost
     private bool _shiftHeld;
     private static readonly AbilityDef[] _defs =
     {
-        new("Bolt", 2f, 12f, "cast02", true),    // снаряд: поворот обязателен
-        new("Nova", 5f,  4f, "cast01", false),   // AoE вокруг себя — поворот не нужен
-        new("Heal", 6f,  0f, "cast01", false),
+        new("Bolt", 2f, 12f, "cast02", true,  40f),
+        new("Nova", 5f,  4f, "cast02", false, 30f),
+        new("Heal", 6f,  0f, "cast01", false, 40f),
     };
     private float _animRate = 1.25f;   // темп анимаций; Lock/Cd делятся на него
+
+    // Время контакта по клипам — крутится здесь, независимо от _animRate
+    private static readonly Dictionary<string, float> _hitAt = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["slash01"] = 0.35f,
+        ["cast02"] = 0.45f,
+        ["cast01"] = 0.50f,
+    };
+    private float HitAtFor(string clip) =>
+        Math.Clamp(_hitAt.TryGetValue(clip, out var v) ? v : 0.4f, 0f, 0.95f);
 
     protected override void OnLoad()
     {
@@ -66,9 +76,6 @@ internal partial class MyGame : EngineHost
             if (_imgui.WantMouse) return;
             _camera.ZoomAt(MouseScreen, MathF.Pow(1.15f, -wheel.Y));
         };
-
-        // _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) _lmbHeld = true; };
-        // _mouse.MouseUp += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
 
         _gpuWorld = new GpuProfiler(Gl);
         _gpuUi = new GpuProfiler(Gl);
@@ -139,6 +146,7 @@ internal partial class MyGame : EngineHost
         CastSystem();
         AISystem();
         AnimSystem((float)dt);
+        ActionSystem();
         MovementSystem((float)dt);
         SeparationSystem();
         ProjectileSystem((float)dt);
