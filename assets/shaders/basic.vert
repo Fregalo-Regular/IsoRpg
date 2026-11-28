@@ -9,7 +9,7 @@ layout (location = 5) in vec4 aWeights;
 
 uniform mat4 uViewProjection;
 uniform mat4 uModel;
-uniform mat4 uJoints[64];
+uniform mat4 uJoints[128];
 uniform int  uSkinned;
 
 out vec3 vColor;

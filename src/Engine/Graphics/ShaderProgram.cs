@@ -103,7 +103,7 @@ public sealed class ShaderProgram : IDisposable
     private uint Compile(ShaderType type, string path)
     {
         string full = AssetPath.Resolve(path);
-        string source = File.ReadAllText(full);
+        string source = File.ReadAllText(AssetPath.Resolve(path));
 
         uint shader = _gl.CreateShader(type);
         _gl.ShaderSource(shader, source);

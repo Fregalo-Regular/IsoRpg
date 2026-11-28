@@ -117,8 +117,12 @@ public static class GltfLoader
             skeleton.BindVsLibrary();
         }
 
-        Console.WriteLine($"[glTF] {relativePath}: {result.Count} примитивов");
-        return new GltfModel(result, skeleton);
+        var anims = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in model.LogicalAnimations)
+            if (!string.IsNullOrEmpty(a.Name)) anims[a.Name] = a.LogicalIndex;
+
+        Console.WriteLine($"[glTF] {relativePath}: {result.Count} примитивов, {anims.Count} анимаций");
+        return new GltfModel(result, skeleton, anims);
     }
 
     private static void Dump(string label, object? o)

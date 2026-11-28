@@ -53,6 +53,12 @@ internal partial class MyGame
             if (d.Length() < c.Range && Vector3.Dot(Vector3.Normalize(d), fwd) > 0.3f)
                 Hit(m, c.Damage, ap.Pos);
         }
+
+        if (_world.Has<AnimState>(attacker))
+        {
+            float dur = PlayOneShot(attacker, "slash01");
+            if (dur > 0) c.Cd = MathF.Max(c.Cd, dur);
+        }
     }
 
     private void SpawnNumber(Vector3 pos, float val)

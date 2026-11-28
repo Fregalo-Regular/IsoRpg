@@ -26,7 +26,7 @@ internal partial class MyGame
                 { ref var mv = ref _world.Get<Movement>(_player); mv.Target = new Vector3(h.X, 0, h.Z); mv.Moving = true; }
             }
         }
-        // hold-to-move только когда НЕ атакуем
+        //hold-to-move только когда НЕ атакуем
         if (_lmbHeld && !at.Active && !_imgui.WantMouse && _height.Raycast(o, d, 400f, out var h2))
         { ref var mv = ref _world.Get<Movement>(_player); mv.Target = new Vector3(h2.X, 0, h2.Z); mv.Moving = true; }
     }
@@ -42,14 +42,24 @@ internal partial class MyGame
             ref var tr = ref _world.Get<Transform>(e);
             float radius = _world.Get<Collider>(e).Radius;
 
-            if (mv.Moving)
+            // Knockback: один раз за кадр, независимо от Moving (раньше был внутри цикла obstacles и затирался)
+            if (_world.Has<Velocity>(e))
+            {
+                ref var v = ref _world.Get<Velocity>(e);
+                tr.Pos += v.Vel * dt;
+                v.Vel *= MathF.Exp(-6f * dt);
+            }
+
+            bool locked = _world.Has<AnimState>(e) && _world.Get<AnimState>(e).Lock > 0;
+            if (mv.Moving && !locked)
             {
                 var d = mv.Target - tr.Pos; d.Y = 0; float dist = d.Length();
                 if (dist < 0.05f) mv.Moving = false;
                 else
                 {
+                    float speed = mv.Speed * (e == _player && _shiftHeld ? 0.5f : 1f);
                     var dir = d / dist;
-                    var desired = tr.Pos + dir * MathF.Min(mv.Speed * dt, dist);
+                    var desired = tr.Pos + dir * MathF.Min(speed * dt, dist);
                     if (_height.Sample(desired.X, desired.Z) - tr.Pos.Y <= _maxStep)
                     {
                         float lim = (_grid - 1) / 2f * Tile;
@@ -57,12 +67,6 @@ internal partial class MyGame
                         desired.Z = Math.Clamp(desired.Z, -lim, lim);
                         foreach (int o in obstacles.Entities())
                         {
-                            if (_world.Has<Velocity>(e))
-                            {
-                                ref var v = ref _world.Get<Velocity>(e);
-                                tr.Pos += v.Vel * dt; v.Vel *= MathF.Exp(-6f * dt);
-                            }
-
                             if (o == e) continue;
                             var ot = _world.Get<Transform>(o); var oc = _world.Get<Collider>(o);
                             var d2 = new Vector2(desired.X - ot.Pos.X, desired.Z - ot.Pos.Z);
@@ -92,19 +96,29 @@ internal partial class MyGame
     {
         foreach (int e in _world.Set<Renderable>().Entities())
         {
-            if (_world.Has<Health>(e) && _world.Get<Health>(e).Dead) continue;
+            bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
+            if (dead && !_world.Has<AnimState>(e)) continue;   // без death-клипа исчезаем как раньше
+
             var r = _world.Get<Renderable>(e);
             var tr = _world.Get<Transform>(e);
             var tint = r.Tint;
-            if (_world.Has<Combat>(e) && _world.Get<Combat>(e).Flash > 0) tint = new Vector3(2f, 0.6f, 0.5f);
+            if (!dead && _world.Has<Combat>(e) && _world.Get<Combat>(e).Flash > 0) tint = new Vector3(2f, 0.6f, 0.5f);
 
             if (r.Model != null)
             {
                 if (r.Model.Skeleton is { } sk)
                 {
-                    bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
-                    if (moving) sk.Play(r.AnimIndex, _world.Get<Movement>(e).Walk);
-                    else sk.UpdateBindPose();
+                    if (_world.Has<AnimState>(e))
+                    {
+                        var a = _world.Get<AnimState>(e);
+                        sk.Play(a.Clip, a.Time, a.Loop);
+                    }
+                    else
+                    {
+                        bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
+                        if (moving) sk.Play(r.AnimIndex, _world.Get<Movement>(e).Walk);
+                        else sk.UpdateBindPose();
+                    }
                 }
                 DrawModel(r.Model, tr.Pos, r.Scale, tr.Yaw, tint);
             }
@@ -119,8 +133,6 @@ internal partial class MyGame
                 r.Mesh.Draw();
                 if (_cull) Gl.Enable(EnableCap.CullFace);
             }
-            if (_world.Has<Health>(e) && _world.Get<Health>(e).Dead) continue;
-            if (_world.Has<Combat>(e) && _world.Get<Combat>(e).Flash > 0) tint = new Vector3(2f, 0.6f, 0.5f);
         }
     }
 
@@ -144,6 +156,13 @@ internal partial class MyGame
                 _world.Get<Velocity>(e).Vel = Vector3.Zero;
                 if (_world.Has<AI>(e)) _world.Get<AI>(e).Angry = false;      // ← забывался
                 if (_world.Has<Movement>(e)) _world.Get<Movement>(e).Moving = false;
+            }
+
+            if (_world.Has<AnimState>(e))
+            {
+                var mdl = _world.Get<Renderable>(e).Model;
+                int idle = mdl is not null && mdl.Anims.TryGetValue("idle01", out var ix) ? ix : 0;
+                _world.Get<AnimState>(e) = new AnimState { Clip = idle, Loop = true };
             }
         }
         ref var ab = ref _world.Get<Abilities>(_player);
@@ -188,7 +207,7 @@ internal partial class MyGame
             var to = pt - _world.Get<Transform>(m).Pos; to.Y = 0;
             float dist = to.Length();
 
-            // радиус будит пачку (урон уже будит через Hit)
+            //радиус будит пачку (урон уже будит через Hit)
             if (!playerDead && dist < ai.Aggro && !ai.Angry) Aggro(m);
             bool angry = _world.Get<AI>(m).Angry;
 
@@ -232,6 +251,7 @@ internal partial class MyGame
     {
         ref var at = ref _world.Get<AttackTarget>(_player);
         if (!at.Active || !_lmbHeld || _world.Get<Health>(_player).Dead) return;
+        if (_world.Has<AnimState>(_player) && _world.Get<AnimState>(_player).Lock > 0) return; // каст/атака держит позу и Yaw
         int t = at.Entity;
         if (!_world.Has<Health>(t) || _world.Get<Health>(t).Dead) { at.Active = false; return; }
 
@@ -247,35 +267,41 @@ internal partial class MyGame
     {
         if (!_rmbEdge) return; _rmbEdge = false;
         if (_world.Get<Health>(_player).Dead) return;
+        if (_world.Has<AnimState>(_player) && _world.Get<AnimState>(_player).Lock > 0) return;
+
         var def = _defs[_selectedAbility];
         ref var ab = ref _world.Get<Abilities>(_player);
         ref var st = ref AbilityRef(ref ab, _selectedAbility);
         if (st.Charges <= 0) return;
         st.Charges--;
+
         var pp = _world.Get<Transform>(_player).Pos;
+        var aim = AimPoint(pp);
+
+        // Поворот переживёт каст: MovementSystem стоит под Lock и не перезапишет Yaw.
+        if (def.FaceTarget)
+        {
+            var f = aim - pp; f.Y = 0;
+            if (f.LengthSquared() > 1e-6f)
+                _world.Get<Transform>(_player).Yaw = MathF.Atan2(f.X, f.Z);
+        }
+
+        PlayOneShot(_player, def.Clip);
 
         if (_selectedAbility == 0)
         {
-            var at = _world.Get<AttackTarget>(_player);
-            _camera.ScreenRay(MouseScreen, out var ro, out var rd);
-            Vector3 aim = at.Active
-                ? _world.Get<Transform>(at.Entity).Pos
-                : (_height.Raycast(ro, rd, out var h) ? h : pp + Vector3.UnitZ);
-            var dir = aim - pp; dir.Y = 0; dir = Vector3.Normalize(dir);
+            var dir = aim - pp; dir.Y = 0;
+            float yaw = _world.Get<Transform>(_player).Yaw;
+            dir = dir.LengthSquared() > 1e-6f
+                ? Vector3.Normalize(dir)
+                : new Vector3(MathF.Sin(yaw), 0, MathF.Cos(yaw));   // курсор точно на игроке
+
             int e = _world.Create();
             _world.Add<Transform>(e) = new Transform { Pos = pp + Vector3.UnitY + dir * 0.6f };
             _world.Add<Velocity>(e) = new Velocity { Vel = dir * 14f };
             _world.Add<Projectile>(e) = new Projectile { Damage = 40, Radius = 0.5f, Life = 2f };
-            Vertex[] vertices =
-            [
-            new() { Position = new(-0.5f, 0f,  0.5f), Color = Vector3.UnitY, UV = new(0f, 0f) },
-                    new() { Position = new( 0.5f, 0f,  0.5f), Color = Vector3.UnitY, UV = new(1f, 0f) },
-                    new() { Position = new( 0.5f, 0f, -0.5f), Color = Vector3.UnitY, UV = new(1f, 1f) },
-                    new() { Position = new(-0.5f, 0f, -0.5f), Color = Vector3.UnitY, UV = new(0f, 1f) },
-                ];
-                    ushort[] indices = [0, 1, 2, 2, 3, 0];
-                    _world.Add<Renderable>(e) = new Renderable { Mesh = new Mesh(Gl, vertices, indices), Size = new Vector3(0.3f, 0.3f, 0.3f), Tint = new Vector3(2f, 0.8f, 0.2f) };
-                }
+            _world.Add<Renderable>(e) = new Renderable { Mesh = _quad, Size = new Vector3(0.3f), Tint = new Vector3(2f, 0.8f, 0.2f) };
+        }
         else if (_selectedAbility == 1)
         {
             foreach (int m in _world.Set<MobTag>().Entities())
@@ -291,6 +317,15 @@ internal partial class MyGame
             h.Hp = MathF.Min(h.Max, h.Hp + 40);
             SpawnNumber(pp + Vector3.UnitY * 1.6f, 40, new Vector3(0.3f, 1f, 0.4f));
         }
+    }
+
+    private Vector3 AimPoint(Vector3 from)
+    {
+        var at = _world.Get<AttackTarget>(_player);
+        if (at.Active && _world.Has<Health>(at.Entity) && !_world.Get<Health>(at.Entity).Dead)
+            return _world.Get<Transform>(at.Entity).Pos;
+        _camera.ScreenRay(MouseScreen, out var ro, out var rd);
+        return _height.Raycast(ro, rd, out var h) ? h : from + Vector3.UnitZ;
     }
 
     private void ProjectileSystem(float dt)
@@ -319,5 +354,44 @@ internal partial class MyGame
         var ids = _world.Set<Effect>().Entities().ToArray();
         foreach (int e in ids)
         { ref var f = ref _world.Get<Effect>(e); f.T += dt; if (f.T > f.Dur) _world.Destroy(e); }
+    }
+
+    private void AnimSystem(float dt)
+    {
+        foreach (int e in _world.Set<AnimState>().Entities())
+        {
+            ref var a = ref _world.Get<AnimState>(e);
+            var r = _world.Get<Renderable>(e);
+            if (r.Model?.Skeleton is not { } sk) continue;
+
+            a.Time += dt * _animRate;
+            if (a.Lock > 0)
+            {
+                a.Lock = MathF.Max(0, a.Lock - dt);
+                if (a.Lock > 0) continue;   // атака/смерть доигрывает до конца
+            }
+
+            bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
+            bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
+            string want = dead ? "death" : moving ? (_shiftHeld ? "walk" : "run01") : "idle01";
+            if (!r.Model.Anims.TryGetValue(want, out int clip)) continue;
+
+            if (clip != a.Clip) { a.Clip = clip; a.Time = 0; }
+            a.Loop = !dead;
+            if (dead) a.Lock = sk.Duration(clip) / _animRate;   // труп держит позу до респауна
+        }
+    }
+
+    /// Одноразовый клип с локом движения. Возвращает длительность (0 — клипа нет).
+    private float PlayOneShot(int e, string clipName)
+    {
+        if (!_world.Has<AnimState>(e)) return 0f;
+        var model = _world.Get<Renderable>(e).Model;
+        if (model?.Skeleton is not { } sk) return 0f;
+        if (!model.Anims.TryGetValue(clipName, out int clip)) return 0f;
+
+        ref var a = ref _world.Get<AnimState>(e);
+        a.Clip = clip; a.Time = 0; a.Loop = false; a.Lock = sk.Duration(clip);
+        return a.Lock;
     }
 }

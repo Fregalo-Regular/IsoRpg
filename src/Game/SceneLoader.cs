@@ -40,19 +40,12 @@ public static class SceneLoader
 {
     private static Vector3 V(float[] a) => new(a[0], a[1], a[2]);
 
-    private static readonly (string Name, float Cd, float Range)[] defs =
-    { ("Bolt", 2f, 12), ("Nova", 5f, 4), ("Heal", 6f, 0) };
-
     public static int Load(World w, GL gl, string path,
-        Dictionary<string, GltfModel> cache, (string Name, float Cd, float Range)[] defs)
+        Dictionary<string, GltfModel> cache, AbilityDef[] defs)
     {
         var s = JsonSerializer.Deserialize<SceneFile>(File.ReadAllText(AssetPath.Resolve(path)),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        // if (s?.Player == null)
-        // {
-        //     Console.WriteLine($"player={(s.Player == null ? "null" : s.Player.Model)} mobs={s.Mobs.Count} props={s.Props.Count}");
-        //     throw new InvalidOperationException("scene.json: player не привязался. Проверь регистр/структуру и наличие ключа \"player\".");
-        // }
+
         var crate = MakeCube(gl);
         int player = SpawnPlayer(w, gl, s.Player, cache, defs);
         foreach (var m in s.Mobs) SpawnMob(w, gl, m, cache);
@@ -67,7 +60,7 @@ public static class SceneLoader
     }
 
     private static int SpawnPlayer(World w, GL gl, PlayerDef d,
-        Dictionary<string, GltfModel> c, (string Name, float Cd, float Range)[] defs)
+        Dictionary<string, GltfModel> c, AbilityDef[] defs)
     {
         int e = w.Create();
         w.Add<Transform>(e) = new Transform { Pos = V(d.Pos) };
@@ -84,6 +77,10 @@ public static class SceneLoader
             A2 = new AbilityState { Charges = 1, Max = 1, Cd = defs[2].Cd },
         };
         w.Add<Renderable>(e) = new Renderable { Model = Model(gl, c, d.Model), Scale = d.Scale, Tint = Vector3.One, AnimIndex = 0 };
+        w.Add<PlayerTag>(e);
+        var model = Model(gl, c, d.Model);
+        w.Add<Renderable>(e) = new Renderable { Model = model, Scale = d.Scale, Tint = Vector3.One, AnimIndex = 0 };
+        w.Add<AnimState>(e) = new AnimState { Clip = model.Anims.TryGetValue("idle01", out var idle) ? idle : 0, Loop = true };
         w.Add<PlayerTag>(e);
         return e;
     }

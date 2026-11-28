@@ -7,48 +7,7 @@ namespace Game;
 
 internal partial class MyGame
 {
-    private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw = 0f)
-    {
-        if (model.Primitives.Count == 0) return;
-
-        if (model.Skeleton is { } sk)
-        {
-            _shader.SetUniform("uSkinned", 1);
-            _shader.SetUniformMatrixArray("uJoints[0]", sk.Palette);
-        }
-        else
-        {
-            _shader.SetUniform("uSkinned", 0);
-        }
-
-        var scaleM = Matrix4x4.CreateScale(scale);
-
-        // Для скиннинг-меша Transform = Identity, и сырые габариты лежат в пространстве меша
-        // (у CesiumMan — Z-up). Ориентацию даёт палитра. В bind pose она одинакова у всех
-        // костей, поэтому Palette[0] работает как матрица меш→мир.
-        float lowest = float.MaxValue;
-        foreach (var p in model.Primitives)
-        {
-            var basis = model.Skeleton is { } s ? s.Palette[0] : p.Transform;
-            lowest = MathF.Min(lowest, LowestY(p.BoundsMin, p.BoundsMax, basis * scaleM));
-        }
-
-        foreach (var p in model.Primitives)
-        {
-            if (p.Texture != null) { p.Texture.Bind(TextureUnit.Texture0); _shader.SetUniform("uUseTexture", 1); }
-            else _shader.SetUniform("uUseTexture", 0);
-
-            var m = p.Transform * scaleM
-                    * Matrix4x4.CreateRotationY(yaw)
-                    * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
-            _shader.SetUniform("uModel", m);
-            _shader.SetUniform("uTint", Vector3.One);
-            p.Mesh.Draw();
-            _drawCalls++;
-        }
-    }
-
-    private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw, Vector3 tint)
+    private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw = 0f, Vector3? tint = null)
     {
         if (model.Primitives.Count == 0) return;
 
@@ -67,6 +26,7 @@ internal partial class MyGame
             lowest = MathF.Min(lowest, LowestY(p.BoundsMin, p.BoundsMax, basis * scaleM));
         }
 
+        var col = tint ?? Vector3.One;
         foreach (var p in model.Primitives)
         {
             if (p.Texture != null) { p.Texture.Bind(TextureUnit.Texture0); _shader.SetUniform("uUseTexture", 1); }
@@ -76,7 +36,7 @@ internal partial class MyGame
                   * Matrix4x4.CreateRotationY(yaw)
                   * Matrix4x4.CreateTranslation(position.X, position.Y - lowest, position.Z);
             _shader.SetUniform("uModel", m);
-            _shader.SetUniform("uTint", tint);
+            _shader.SetUniform("uTint", col);
             p.Mesh.Draw();
             _drawCalls++;
         }

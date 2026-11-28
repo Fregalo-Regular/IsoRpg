@@ -1,5 +1,5 @@
 {
-  "player": { "model": "assets/models/CesiumMan.glb", "pos": [-6,0,0], "scale": 1, "hp": 100 },
+  "player": { "model": "assets/models/char01.glb", "pos": [-6,0,0], "scale": 1, "hp": 100 },
   "mobs": [
     { "model": "assets/models/Fox.glb", "pos": [10,0,8],  "scale": 0.01, "hp": 60, "pack": 1, "aggro": 9 },
     { "model": "assets/models/Fox.glb", "pos": [12,0,-4], "scale": 0.01, "hp": 60, "pack": 1, "aggro": 9 },

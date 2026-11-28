@@ -43,15 +43,18 @@ internal partial class MyGame : EngineHost
     private int _player;
     private Mesh _ring = null!;
     private bool _lmbEdge = false;
-    private int _foxClip = 2;
-    private static readonly (string Name, float Cd, float Range)[] _defs =
-    { ("Bolt", 2f, 12), ("Nova", 5f, 4), ("Heal", 6f, 0) };
     private int _selectedAbility, _maxCharges = 1;
     private bool _rmbEdge;
     private readonly Dictionary<string, GltfModel> _modelCache = new();
-    private bool _attackQueued; private int _kills;
-    public struct Number { public float Val, T; public Vector3 Color; }
-    //private Vector3 ScreenRayDir() { _camera.ScreenRay(MouseScreen, out var o, out var d); return d; }
+    private int _kills;
+    private bool _shiftHeld;
+    private static readonly AbilityDef[] _defs =
+    {
+        new("Bolt", 2f, 12f, "cast02", true),    // снаряд: поворот обязателен
+        new("Nova", 5f,  4f, "cast01", false),   // AoE вокруг себя — поворот не нужен
+        new("Heal", 6f,  0f, "cast01", false),
+    };
+    private float _animRate = 1.25f;   // темп анимаций; Lock/Cd делятся на него
 
     protected override void OnLoad()
     {
@@ -64,8 +67,8 @@ internal partial class MyGame : EngineHost
             _camera.ZoomAt(MouseScreen, MathF.Pow(1.15f, -wheel.Y));
         };
 
-        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) _lmbHeld = true; };
-        _mouse.MouseUp += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
+        // _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) _lmbHeld = true; };
+        // _mouse.MouseUp += (_, b) => { if (b == MouseButton.Left) _lmbHeld = false; };
 
         _gpuWorld = new GpuProfiler(Gl);
         _gpuUi = new GpuProfiler(Gl);
@@ -89,39 +92,6 @@ internal partial class MyGame : EngineHost
         ushort[] indices = [0, 1, 2, 2, 3, 0];
         _quad = new Mesh(Gl, vertices, indices);
 
-        _player = _world.Create();
-        _world.Add<Transform>(_player) = new Transform { Pos = new Vector3(-6, 0, 0) };
-        _world.Add<Movement>(_player) = new Movement { Speed = 3f };
-        _world.Add<Collider>(_player) = new Collider { Radius = _playerRadius };
-        _world.Add<PlayerTag>(_player);
-
-        _world.Add<Health>(_player) = new Health { Hp = 100, Max = 100 };
-        _world.Add<Combat>(_player) = new Combat { Damage = 25, Range = 1.8f };
-        _world.Add<Velocity>(_player);
-        _kb.KeyDown += (_, k, _) => { if (k == Key.Space) _attackQueued = true; };
-
-        foreach (int m in _world.Set<MobTag>().Entities())
-        {
-            _world.Add<Health>(m) = new Health { Hp = 60, Max = 60 };
-            _world.Add<Combat>(m) = new Combat { Damage = 8, Range = 1.2f };
-            _world.Add<AI>(m) = new AI { Aggro = 9f };
-            _world.Add<Movement>(m) = new Movement { Speed = 2.5f };
-            _world.Add<Velocity>(m);
-        }
-
-        _world.Add<AttackTarget>(_player);
-        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Left) { _lmbHeld = true; _lmbEdge = true; } };
-        _mouse.MouseUp   += (_, b) => { if (b == MouseButton.Left) { _lmbHeld = false; _world.Get<AttackTarget>(_player).Active = false; } };
-
-        foreach (int e in _world.Set<MobTag>().Entities())
-            _world.Get<Renderable>(e).AnimIndex = _foxClip;
-
-        _world.Add<Abilities>(_player) = new Abilities
-        {
-            A0 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[0].Cd },
-            A1 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[1].Cd },
-            A2 = new AbilityState { Charges = 1, Max = 1, Cd = _defs[2].Cd },
-        };
         _mouse.MouseDown += (_, b) => { if (b == MouseButton.Right) _rmbEdge = true; };
         _kb.KeyDown += (_, k, _) =>
         {
@@ -129,6 +99,18 @@ internal partial class MyGame : EngineHost
             if (k == Key.Number2) _selectedAbility = 1;
             if (k == Key.Number3) _selectedAbility = 2;
         };
+
+        _mouse.MouseDown += (_, b) =>
+        {
+            if (b == MouseButton.Left) { _lmbHeld = true; _lmbEdge = true; }
+            if (b == MouseButton.Right) _rmbEdge = true;
+        };
+        _mouse.MouseUp += (_, b) =>
+        {
+            if (b == MouseButton.Left) { _lmbHeld = false; _world.Get<AttackTarget>(_player).Active = false; }
+        };
+        _kb.KeyDown += (_, k, _) => { if (k is Key.ShiftLeft or Key.ShiftRight) _shiftHeld = true; };
+        _kb.KeyUp += (_, k, _) => { if (k is Key.ShiftLeft or Key.ShiftRight) _shiftHeld = false; };
 
         _player = SceneLoader.Load(_world, Gl, "assets/scene.json", _modelCache, _defs);
     }
@@ -156,6 +138,7 @@ internal partial class MyGame : EngineHost
         AutoAttackSystem();
         CastSystem();
         AISystem();
+        AnimSystem((float)dt);
         MovementSystem((float)dt);
         SeparationSystem();
         ProjectileSystem((float)dt);

@@ -135,12 +135,13 @@ public sealed class Skeleton
 
     public void UpdateBindPose() { RestoreBind(); UpdatePalette(); }
 
-    public void Play(int animIndex, float time)
+    public void Play(int animIndex, float time, bool loop = true)
     {
         RestoreBind();
         var anim = _anims[animIndex];
-        float t = anim.Duration > 0 ? time % anim.Duration : 0;
-
+        float t = loop
+            ? (anim.Duration > 0 ? time % anim.Duration : 0)
+            : MathF.Min(time, anim.Duration);   // non-loop: держим последний кадр
         foreach (var tr in _tracks[animIndex])
         {
             if (tr.Path == "rotation") _r[tr.Node] = SampleQ(tr, t);

@@ -23,7 +23,7 @@ public struct MobTag { }
 public struct ObstacleTag { }
 public struct Combat { public float Cd, Flash, Damage, Range; }
 public struct AI { public float Aggro; public bool Angry; }
-public struct Number { public float Val, T; }
+//public struct Number { public float Val, T; }
 public struct NumberTag { }
 public struct AttackTarget { public int Entity; public bool Active; }
 public struct AbilityState { public int Charges, Max; public float Regen, Cd; }
@@ -31,3 +31,11 @@ public struct Abilities { public AbilityState A0, A1, A2; }
 public struct Projectile { public float Damage, Radius, Life; }
 public struct Effect { public float T, Dur, Radius; }   // расширяющееся кольцо новы
 public struct Pack { public int Id; }
+public struct AnimState
+{
+    public int Clip;    // индекс клипа в glTF
+    public float Time;  // секунды от начала клипа
+    public bool Loop;
+    public float Lock;  // остаток времени непрерываемого клипа (атака/смерть)
+}
+public struct Number { public float Val, T; public Vector3 Color; }
