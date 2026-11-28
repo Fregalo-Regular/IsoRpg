@@ -5,7 +5,7 @@ namespace Game;
 
 internal partial class MyGame
 {
-    private void Hit(int target, float dmg, Vector3 from)
+    private void Hit(int target, float dmg, Vector3 from, float knockback)
     {
         ref var h = ref _world.Get<Health>(target);
         ref var c = ref _world.Get<Combat>(target);
@@ -14,14 +14,15 @@ internal partial class MyGame
         h.Hp -= dmg;
         c.Flash = 0.15f;
 
-        var kb = t.Pos - from; kb.Y = 0;
-        if (kb.Length() > 1e-4f)
-            _world.Get<Velocity>(target).Vel += Vector3.Normalize(kb) * 6f;
+        if (knockback > 0f)
+        {
+            var kb = t.Pos - from; kb.Y = 0;
+            if (kb.LengthSquared() > 1e-8f)
+                _world.Get<Velocity>(target).Vel += Vector3.Normalize(kb) * knockback;
+        }
 
         SpawnNumber(t.Pos + Vector3.UnitY * 1.4f, dmg);
-
-        if (_world.Has<AI>(target)) Aggro(target);          // урон будит моба и пачку
-
+        if (_world.Has<AI>(target)) Aggro(target);
         if (h.Hp <= 0)
         {
             h.Dead = true; h.Respawn = 3f;
@@ -71,7 +72,7 @@ internal partial class MyGame
     switch (a.Kind)
     {
         case 0: MeleeHit(e, a.Damage, a.Range); break;
-        case 1: SpawnBolt(_world.Get<Transform>(e).Pos, a.Dir, a.Damage); break;
+        case 1: SpawnBolt(e, a.Dir, a.Damage); break;
         case 2: Nova(e, a.Damage, a.Range); break;
         case 3: Heal(e, a.Damage); break;
     }
@@ -81,31 +82,35 @@ internal partial class MyGame
     {
         var ap = _world.Get<Transform>(attacker);
         var fwd = new Vector3(MathF.Sin(ap.Yaw), 0, MathF.Cos(ap.Yaw));
+        float kb = _world.Get<Combat>(attacker).Knockback;
         foreach (int m in _world.Set<MobTag>().Entities())
         {
             if (_world.Get<Health>(m).Dead) continue;
             var d = _world.Get<Transform>(m).Pos - ap.Pos; d.Y = 0;
             float len = d.Length();
             if (len < range && (len < 1e-4f || Vector3.Dot(d / len, fwd) > 0.3f))
-                Hit(m, dmg, ap.Pos);
+                Hit(m, dmg, ap.Pos, kb);
         }
     }
 
-    private void SpawnBolt(Vector3 from, Vector3 dir, float dmg)
+    private void SpawnBolt(int caster, Vector3 dir, float dmg)
     {
+        var from = _world.Get<Transform>(caster).Pos;
         int e = _world.Create();
         _world.Add<Transform>(e) = new Transform { Pos = from + Vector3.UnitY + dir * 0.6f };
         _world.Add<Velocity>(e) = new Velocity { Vel = dir * 14f };
-        _world.Add<Projectile>(e) = new Projectile { Damage = dmg, Radius = 0.5f, Life = 2f };
+        _world.Add<Projectile>(e) = new Projectile
+        { Damage = dmg, Radius = 0.5f, Life = 2f, Knockback = _world.Get<Combat>(caster).Knockback };
         _world.Add<Renderable>(e) = new Renderable { Mesh = _quad, Size = new Vector3(0.3f), Tint = new Vector3(2f, 0.8f, 0.2f) };
     }
 
     private void Nova(int caster, float dmg, float range)
     {
         var pp = _world.Get<Transform>(caster).Pos;
+        float kb = _world.Get<Combat>(caster).Knockback;
         foreach (int m in _world.Set<MobTag>().Entities())
             if (!_world.Get<Health>(m).Dead && (_world.Get<Transform>(m).Pos - pp).Length() < range)
-                Hit(m, dmg, pp);
+                Hit(m, dmg, pp, kb);
         int e = _world.Create();
         _world.Add<Transform>(e) = new Transform { Pos = pp };
         _world.Add<Effect>(e) = new Effect { Dur = 0.4f, Radius = range };

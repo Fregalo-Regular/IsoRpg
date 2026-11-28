@@ -10,19 +10,20 @@ internal partial class MyGame
     private void DrawModel(GltfModel model, Vector3 position, float scale, float yaw = 0f, Vector3? tint = null)
     {
         if (model.Primitives.Count == 0) return;
-
+        
         if (model.Skeleton is { } sk)
         {
             _shader.SetUniform("uSkinned", 1);
             _shader.SetUniformMatrixArray("uJoints[0]", sk.Palette);
         }
         else _shader.SetUniform("uSkinned", 0);
+        
 
         var scaleM = Matrix4x4.CreateScale(scale);
         float lowest = float.MaxValue;
         foreach (var p in model.Primitives)
         {
-            var basis = model.Skeleton is { } s ? s.Palette[0] : p.Transform;
+            var basis = model.Skeleton is { } s ? s.BindBasis : p.Transform;
             lowest = MathF.Min(lowest, LowestY(p.BoundsMin, p.BoundsMax, basis * scaleM));
         }
 

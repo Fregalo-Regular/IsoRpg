@@ -57,7 +57,8 @@ internal partial class MyGame
                 if (dist < 0.05f) mv.Moving = false;
                 else
                 {
-                    float speed = mv.Speed * (e == _player && _shiftHeld ? 0.75f : 1.75f);
+                    float speed = mv.Speed;
+                    if (e == _player) speed *= _shiftHeld ? 0.75f : 1.75f;
                     var dir = d / dist;
                     var desired = tr.Pos + dir * MathF.Min(speed * dt, dist);
                     if (_height.Sample(desired.X, desired.Z) - tr.Pos.Y <= _maxStep)
@@ -97,7 +98,8 @@ internal partial class MyGame
         foreach (int e in _world.Set<Renderable>().Entities())
         {
             bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
-            if (dead && !_world.Has<AnimState>(e)) continue;   // без death-клипа исчезаем как раньше
+            if (dead && !_world.Has<AnimState>(e)) continue;   // мёртвых С анимацией рендерим
+            //if (dead && !_world.Has<AnimState>(e)) continue;   // без death-клипа исчезаем как раньше
 
             var r = _world.Get<Renderable>(e);
             var tr = _world.Get<Transform>(e);
@@ -149,15 +151,13 @@ internal partial class MyGame
             ref var h = ref _world.Get<Health>(e);
             if (!h.Dead) continue;
             h.Respawn -= dt;
-            if (h.Respawn <= 0)
-            {
-                h.Dead = false; h.Hp = h.Max;
-                _world.Get<Transform>(e).Pos = _world.Has<PlayerTag>(e) ? new Vector3(-6, 0, 0) : new Vector3(10, 0, 8);
-                _world.Get<Velocity>(e).Vel = Vector3.Zero;
-                if (_world.Has<AI>(e)) _world.Get<AI>(e).Angry = false;      // ← забывался
-                if (_world.Has<Movement>(e)) _world.Get<Movement>(e).Moving = false;
-            }
+            if (h.Respawn > 0) continue;          // всё ниже — только в кадр возрождения
 
+            h.Dead = false; h.Hp = h.Max;
+            _world.Get<Transform>(e).Pos = _world.Has<PlayerTag>(e) ? new Vector3(-6, 0, 0) : new Vector3(10, 0, 8);
+            _world.Get<Velocity>(e).Vel = Vector3.Zero;
+            if (_world.Has<AI>(e)) _world.Get<AI>(e).Angry = false;
+            if (_world.Has<Movement>(e)) _world.Get<Movement>(e).Moving = false;
             if (_world.Has<AnimState>(e))
             {
                 var mdl = _world.Get<Renderable>(e).Model;
@@ -217,7 +217,7 @@ internal partial class MyGame
                 else
                 {
                     mv.Moving = false;
-                    if (c.Cd <= 0) { c.Cd = 1f; Hit(_player, c.Damage, _world.Get<Transform>(m).Pos); }
+                    if (c.Cd <= 0) { c.Cd = 1f; Hit(_player, c.Damage, _world.Get<Transform>(m).Pos, c.Knockback); }
                 }
             }
             else mv.Moving = false;
@@ -286,8 +286,6 @@ internal partial class MyGame
                 _world.Get<Transform>(_player).Yaw = MathF.Atan2(f.X, f.Z);
         }
 
-        PlayOneShot(_player, def.Clip);
-
         float dur = PlayOneShot(_player, def.Clip);
 
         var dir = aim - pp; dir.Y = 0;
@@ -326,16 +324,26 @@ internal partial class MyGame
             if (!_world.Has<Projectile>(e)) continue;
             ref var p = ref _world.Get<Projectile>(e);
             ref var tr = ref _world.Get<Transform>(e);
+
             tr.Pos += _world.Get<Velocity>(e).Vel * dt;
             p.Life -= dt;
-            bool dead = p.Life <= 0;
+            if (p.Life <= 0) { _world.Destroy(e); continue; }
+
+            // копии до вызова Hit: после Create/Destroy ссылки на массивы протухнут
+            var pos = tr.Pos;
+            float dmg = p.Damage, rad = p.Radius, kb = p.Knockback;
+
             foreach (int m in _world.Set<MobTag>().Entities())
             {
                 if (_world.Get<Health>(m).Dead) continue;
-                if ((_world.Get<Transform>(m).Pos + Vector3.UnitY * 0.5f - tr.Pos).Length() < p.Radius + _world.Get<Collider>(m).Radius)
-                { Hit(m, p.Damage, tr.Pos); dead = true; break; }
+                var mc = _world.Get<Transform>(m).Pos + Vector3.UnitY * 0.5f;
+                if ((mc - pos).Length() < rad + _world.Get<Collider>(m).Radius)
+                {
+                    Hit(m, dmg, pos, kb);
+                    _world.Destroy(e);   // разбиваемся о первый же collider
+                    break;
+                }
             }
-            if (dead) _world.Destroy(e);
         }
     }
 
@@ -355,20 +363,26 @@ internal partial class MyGame
             if (r.Model?.Skeleton is not { } sk) continue;
 
             a.Time += dt * _animRate;
+            bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
+
+            if (dead)
+            {
+                if (r.Model.Anims.TryGetValue("death", out int dclip) && a.Clip != dclip)
+                { a.Clip = dclip; a.Time = 0; a.Loop = false; }
+                continue;
+            }
+
             if (a.Lock > 0)
             {
                 a.Lock = MathF.Max(0, a.Lock - dt);
-                if (a.Lock > 0) continue;   // атака/смерть доигрывает до конца
+                if (a.Lock > 0) continue;
             }
 
-            bool dead = _world.Has<Health>(e) && _world.Get<Health>(e).Dead;
             bool moving = _world.Has<Movement>(e) && _world.Get<Movement>(e).Moving;
-            string want = dead ? "death" : moving ? (_shiftHeld ? "walk" : "run01") : "idle01";
+            string want = moving ? (_shiftHeld ? "walk" : "run01") : "idle01";
             if (!r.Model.Anims.TryGetValue(want, out int clip)) continue;
-
             if (clip != a.Clip) { a.Clip = clip; a.Time = 0; }
-            a.Loop = !dead;
-            if (dead) a.Lock = sk.Duration(clip) / _animRate;   // труп держит позу до респауна
+            a.Loop = true;
         }
     }
 
@@ -381,7 +395,7 @@ internal partial class MyGame
         if (!model.Anims.TryGetValue(clipName, out int clip)) return 0f;
 
         ref var a = ref _world.Get<AnimState>(e);
-        a.Clip = clip; a.Time = 0; a.Loop = false; a.Lock = sk.Duration(clip);
+        a.Clip = clip; a.Time = 0; a.Loop = false; a.Lock = sk.Duration(clip) / _animRate;
         return a.Lock;
     }
 

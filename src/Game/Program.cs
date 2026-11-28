@@ -99,7 +99,6 @@ internal partial class MyGame : EngineHost
         ushort[] indices = [0, 1, 2, 2, 3, 0];
         _quad = new Mesh(Gl, vertices, indices);
 
-        _mouse.MouseDown += (_, b) => { if (b == MouseButton.Right) _rmbEdge = true; };
         _kb.KeyDown += (_, k, _) =>
         {
             if (k == Key.Number1) _selectedAbility = 0;

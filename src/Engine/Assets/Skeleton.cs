@@ -32,6 +32,7 @@ public sealed class Skeleton
     public Matrix4x4[] Palette { get; }
     public int AnimationCount => _anims.Length;
     public float Duration(int i) => _anims[i].Duration;
+    public Matrix4x4 BindBasis { get; }
 
     internal Skeleton(ModelRoot model, Skin skin)
     {
@@ -64,6 +65,7 @@ public sealed class Skeleton
             _tracks[a] = BuildTracks(_anims[a]);
 
         UpdateBindPose();
+        BindBasis = Palette.Length > 0 ? Palette[0] : Matrix4x4.Identity;
     }
 
     private static Matrix4x4[] Matrix4x64Safe(Skin skin)

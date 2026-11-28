@@ -27,7 +27,8 @@ public sealed class MobDef
     public float Scale { get; set; } = 0.01f; 
     public float Hp { get; set; } = 60; 
     public int Pack { get; set; } 
-    public float Aggro { get; set; } = 9; 
+    public float Aggro { get; set; } = 9;
+    public float Knockback { get; set; } = 0f;
 }
 public sealed class PropDef 
 { 
@@ -39,7 +40,7 @@ public sealed class PropDef
 public static class SceneLoader
 {
     private static Vector3 V(float[] a) => new(a[0], a[1], a[2]);
-
+    
     public static int Load(World w, GL gl, string path,
         Dictionary<string, GltfModel> cache, AbilityDef[] defs)
     {
@@ -67,7 +68,7 @@ public static class SceneLoader
         w.Add<Movement>(e) = new Movement { Speed = 3f };
         w.Add<Collider>(e) = new Collider { Radius = 0.35f };
         w.Add<Health>(e) = new Health { Hp = d.Hp, Max = d.Hp };
-        w.Add<Combat>(e) = new Combat { Damage = 25, Range = 1.8f };
+        w.Add<Combat>(e) = new Combat { Damage = 25, Range = 1.8f, Knockback = 1f };
         w.Add<Velocity>(e);
         w.Add<AttackTarget>(e);
         w.Add<Abilities>(e) = new Abilities
@@ -93,7 +94,7 @@ public static class SceneLoader
         w.Add<Collider>(e) = new Collider { Radius = 0.6f };
         w.Add<ObstacleTag>(e);
         w.Add<Health>(e) = new Health { Hp = d.Hp, Max = d.Hp };
-        w.Add<Combat>(e) = new Combat { Damage = 8, Range = 1.2f };
+        w.Add<Combat>(e) = new Combat { Damage = 8, Range = 1.2f, Knockback = d.Knockback };
         w.Add<AI>(e) = new AI { Aggro = d.Aggro };
         w.Add<Movement>(e) = new Movement { Speed = 2.5f };
         w.Add<Velocity>(e);
